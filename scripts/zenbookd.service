@@ -1,0 +1,22 @@
+[Unit]
+Description=ASUS Zenbook Battery Management Daemon
+After=network.target
+
+[Service]
+Type=simple
+
+ExecStart=/usr/local/bin/zenbookd-service
+
+Restart=always
+RestartSec=5
+
+User=root
+Group=root
+
+StateDirectory=zenbookd
+Environment=CONFIG_DIR=/etc/zenbookd
+Environment=STATE_DIR=/var/lib/zenbookd
+Environment=ZENBOOKD_SOCKET=/run/zenbookd.sock
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,124 @@
+use std::{
+    fs,
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
+    path::Path,
+    sync::{Arc, RwLock, mpsc},
+};
+
+use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
+
+use crate::{
+    battery::Battery,
+    config::{Config, save_config},
+};
+
+pub fn run_server(
+    config: Arc<RwLock<Config>>,
+    battery: Arc<Battery>,
+    tx: mpsc::Sender<()>,
+) -> std::io::Result<()> {
+    let socket_path = socket_path();
+    let path = Path::new(&socket_path);
+
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+
+    let listener = UnixListener::bind(path)?;
+
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o666);
+    fs::set_permissions(path, perms)?;
+
+    log::info!("IPC server listening on {socket_path}");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                if let Err(err) = handle_client(
+                    stream,
+                    Arc::clone(&config),
+                    Arc::clone(&battery),
+                    tx.clone(),
+                ) {
+                    log::error!("Error handling IPC client: {err}");
+                }
+            }
+
+            Err(err) => {
+                log::error!("IPC accept error: {err}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_client(
+    mut stream: UnixStream,
+    config: Arc<RwLock<Config>>,
+    battery: Arc<Battery>,
+    tx: mpsc::Sender<()>,
+) -> std::io::Result<()> {
+    let request: Request = match zenbookd_ipc::receive_message(&mut stream) {
+        Ok(req) => req,
+
+        Err(err) => {
+            if let zenbookd_ipc::IpcError::Json(err) = err {
+                let response = Response::Error(format!("Invalid request: {err}"));
+
+                let _ = zenbookd_ipc::send_message(&mut stream, &response);
+            }
+
+            return Ok(());
+        }
+    };
+
+    let response = match request {
+        Request::GetStatus => {
+            let config = config.read().unwrap();
+
+            Response::Status(ServiceStatus {
+                charge_limit: config.charge_limit,
+
+                enable_periodic_full_cycle: config.enable_periodic_full_cycle,
+                full_cycle_period: config.full_cycle_period,
+
+                battery_health: battery.health().ok(),
+                battery_charge: battery.capacity().ok(),
+            })
+        }
+
+        Request::SetChargeLimit(limit) => {
+            log::info!("Requested charge limit: {}", limit);
+
+            let mut config = config.write().unwrap();
+            config.charge_limit = limit;
+
+            let result = save_config(&config);
+            drop(config);
+
+            match result {
+                Ok(_) => {
+                    let _ = tx.send(());
+                    Response::Ok
+                }
+
+                Err(err) => {
+                    log::error!("Failed to save config: {err}");
+
+                    Response::Error(format!("Failed to save config: {err}"))
+                }
+            }
+        }
+    };
+
+    if let Err(err) = zenbookd_ipc::send_message(&mut stream, &response) {
+        log::error!("Error sending IPC response: {err}");
+    }
+
+    Ok(())
+}

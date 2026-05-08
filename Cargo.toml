@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/zenbookd-cli",
+    "crates/zenbookd-service",
+    "crates/zenbookd-ipc"
+]
+
+[workspace.lints]
+clippy.module_inception = "allow"
+rust.unsafe_code = "forbid"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Tecnio <50290580+Tecnio@users.noreply.github.com>"]
+license = "MIT"
+
+[workspace.dependencies]
+log = "0.4.29"
+
+env_logger = {
+    version = "0.11.10",
+    default-features = false,
+    features = ["auto-color"]
+}
+
+thiserror = "2.0.18"
+
+serde = {
+    version = "1.0.228",
+    features = ["derive"]
+}
+
+serde_json = "1.0.149"
+
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+strip = "symbols"
+panic = "abort"

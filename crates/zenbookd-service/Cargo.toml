@@ -1,0 +1,27 @@
+[package]
+name = "zenbookd-service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+zenbookd-ipc.path = "../zenbookd-ipc"
+
+log.workspace = true
+env_logger.workspace = true
+
+thiserror.workspace = true
+
+serde_json.workspace = true
+serde.workspace = true
+
+toml = "1.1.2"
+
+chrono = {
+    version = "0.4.44",
+    features = ["serde"]
+}
