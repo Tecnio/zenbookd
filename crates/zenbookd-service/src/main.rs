@@ -118,23 +118,17 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
             }
         }
 
-        match battery.threshold() {
-            Ok(current_threshold) => {
-                if current_threshold != target_threshold {
-                    log::info!(
-                        "Changing charge threshold from {} to {}",
-                        current_threshold,
-                        target_threshold
-                    );
+        let current_threshold = battery.threshold().unwrap_or(100);
 
-                    if let Err(err) = battery.set_threshold(target_threshold) {
-                        log::error!("Failed to set charge threshold: {err}");
-                    }
-                }
-            }
+        if current_threshold != target_threshold {
+            log::info!(
+                "Changing charge threshold from {} to {}",
+                current_threshold,
+                target_threshold
+            );
 
-            Err(err) => {
-                log::error!("Failed to read current charge threshold: {err}");
+            if let Err(err) = battery.set_threshold(target_threshold) {
+                log::error!("Failed to set charge threshold: {err}");
             }
         }
 
