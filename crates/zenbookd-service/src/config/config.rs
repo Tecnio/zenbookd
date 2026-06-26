@@ -17,6 +17,15 @@ pub struct Config {
     // The duration of time in days where the battery will ignore the charge limit and
     // charge until the battery is fully charged to allow the BMS to calibrate itself.
     pub full_charge_period: u32,
+
+    // When enabled the Wi-Fi power saving features are disabled while the device is plugged
+    // into AC power and restored to their original state once unplugged.
+    #[serde(default = "default_true")]
+    pub disable_wifi_power_save_on_ac: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -32,6 +41,8 @@ impl Default for Config {
             // By default the full recharge will be done every every 2 months.
             // as again IsraelGPT told me that's a good idea.
             full_charge_period: 90,
+
+            disable_wifi_power_save_on_ac: true,
         }
     }
 }

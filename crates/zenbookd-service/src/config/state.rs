@@ -11,6 +11,9 @@ pub struct State {
 
     #[serde(default)]
     pub boost_until: Option<DateTime<Utc>>,
+
+    #[serde(default)]
+    pub wifi_power_save_restore: Option<bool>,
 }
 
 pub fn load_state() -> Result<State, ConfigLoadError> {

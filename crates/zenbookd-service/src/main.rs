@@ -1,6 +1,8 @@
+mod adapter;
 mod battery;
 mod config;
 mod ipc;
+mod wifi;
 
 use std::{
     sync::{Arc, RwLock, mpsc},
@@ -9,9 +11,13 @@ use std::{
 };
 
 use crate::{
+    adapter::Adapter,
     battery::Battery,
     config::{Config, load_config, load_state, save_state},
+    wifi::Wifi,
 };
+
+const POWER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 fn main() {
     env_logger::builder()
@@ -48,6 +54,28 @@ fn main() {
     thread::spawn(move || {
         monitor_battery(battery_clone, config_clone, rx);
     });
+
+    match (Adapter::find(), Wifi::find()) {
+        (Ok(adapter), Ok(wifi)) => {
+            let adapter = Arc::new(adapter);
+            let wifi = Arc::new(wifi);
+            let config_clone = Arc::clone(&config);
+
+            thread::spawn(move || {
+                monitor_power(adapter, wifi, config_clone);
+            });
+        }
+
+        (adapter, wifi) => {
+            if let Err(err) = adapter {
+                log::warn!("AC adapter not available, skipping Wi-Fi power saving: {err}");
+            }
+
+            if let Err(err) = wifi {
+                log::warn!("Wireless interface not available, skipping Wi-Fi power saving: {err}");
+            }
+        }
+    }
 
     if let Err(err) = ipc::run_server(config, battery, tx) {
         log::error!("Failed to start IPC server: {err}");
@@ -156,5 +184,89 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
         let _ = rx.recv_timeout(Duration::from_secs(30));
 
         while rx.try_recv().is_ok() {}
+    }
+}
+
+fn monitor_power(adapter: Arc<Adapter>, wifi: Arc<Wifi>, config: Arc<RwLock<Config>>) {
+    log::info!("Started power monitoring thread");
+
+    loop {
+        let enabled = config.read().unwrap().disable_wifi_power_save_on_ac;
+
+        let mut state = load_state().unwrap_or_default();
+        let mut state_dirty = false;
+
+        if !enabled {
+            if let Some(original) = state.wifi_power_save_restore.take() {
+                log::info!("Wi-Fi power saving feature disabled, restoring original state");
+
+                if let Err(err) = wifi.set_power_save(original) {
+                    log::error!("Failed to restore Wi-Fi power save: {err}");
+                } else {
+                    state_dirty = true;
+                }
+            }
+
+            if state_dirty && let Err(err) = save_state(&state) {
+                log::error!("Failed to save state: {err}");
+            }
+
+            thread::sleep(POWER_POLL_INTERVAL);
+            continue;
+        }
+
+        let online = match adapter.online() {
+            Ok(online) => online,
+
+            Err(err) => {
+                log::error!("Failed to read AC adapter state: {err}");
+                thread::sleep(POWER_POLL_INTERVAL);
+                continue;
+            }
+        };
+
+        match (online, state.wifi_power_save_restore) {
+            (true, None) => {
+                let current = match wifi.power_save() {
+                    Ok(current) => current,
+
+                    Err(err) => {
+                        log::error!("Failed to read Wi-Fi power save: {err}");
+                        thread::sleep(POWER_POLL_INTERVAL);
+                        continue;
+                    }
+                };
+
+                if current {
+                    log::info!("On AC power, disabling Wi-Fi power save");
+
+                    if let Err(err) = wifi.set_power_save(false) {
+                        log::error!("Failed to disable Wi-Fi power save: {err}");
+                    } else {
+                        state.wifi_power_save_restore = Some(current);
+                        state_dirty = true;
+                    }
+                }
+            }
+
+            (false, Some(original)) => {
+                log::info!("On battery power, restoring Wi-Fi power save");
+
+                if let Err(err) = wifi.set_power_save(original) {
+                    log::error!("Failed to restore Wi-Fi power save: {err}");
+                } else {
+                    state.wifi_power_save_restore = None;
+                    state_dirty = true;
+                }
+            }
+
+            _ => {}
+        }
+
+        if state_dirty && let Err(err) = save_state(&state) {
+            log::error!("Failed to save state: {err}");
+        }
+
+        thread::sleep(POWER_POLL_INTERVAL);
     }
 }
