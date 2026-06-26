@@ -5,7 +5,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::Path,
-    sync::{Arc, RwLock, mpsc},
+    sync::{Arc, RwLock},
 };
 
 use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
@@ -13,6 +13,7 @@ use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
 use crate::{
     battery::Battery,
     config::{Config, load_state, save_config, save_state},
+    wake::Wake,
 };
 
 const BOOST_DURATION_HOURS: i64 = 24;
@@ -20,7 +21,7 @@ const BOOST_DURATION_HOURS: i64 = 24;
 pub fn run_server(
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
-    tx: mpsc::Sender<()>,
+    wake: Arc<Wake>,
 ) -> std::io::Result<()> {
     let socket_path = socket_path();
     let path = Path::new(&socket_path);
@@ -44,7 +45,7 @@ pub fn run_server(
                     stream,
                     Arc::clone(&config),
                     Arc::clone(&battery),
-                    tx.clone(),
+                    Arc::clone(&wake),
                 ) {
                     log::error!("Error handling IPC client: {err}");
                 }
@@ -63,7 +64,7 @@ fn handle_client(
     mut stream: UnixStream,
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
-    tx: mpsc::Sender<()>,
+    wake: Arc<Wake>,
 ) -> std::io::Result<()> {
     let request: Request = match zenbookd_ipc::receive_message(&mut stream) {
         Ok(req) => req,
@@ -111,10 +112,7 @@ fn handle_client(
             drop(config);
 
             match result {
-                Ok(_) => {
-                    let _ = tx.send(());
-                    Response::Ok
-                }
+                Ok(_) => Response::Ok,
 
                 Err(err) => {
                     log::error!("Failed to save config: {err}");
@@ -138,10 +136,7 @@ fn handle_client(
             };
 
             match save_state(&state) {
-                Ok(_) => {
-                    let _ = tx.send(());
-                    Response::Ok
-                }
+                Ok(_) => Response::Ok,
 
                 Err(err) => {
                     log::error!("Failed to save state: {err}");
@@ -151,6 +146,10 @@ fn handle_client(
             }
         }
     };
+
+    // Force every monitor thread to re-evaluate now instead of waiting for its
+    // next poll tick, so a command takes effect immediately.
+    wake.notify();
 
     if let Err(err) = zenbookd_ipc::send_message(&mut stream, &response) {
         log::error!("Error sending IPC response: {err}");

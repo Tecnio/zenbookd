@@ -2,10 +2,11 @@ mod adapter;
 mod battery;
 mod config;
 mod ipc;
+mod wake;
 mod wifi;
 
 use std::{
-    sync::{Arc, RwLock, mpsc},
+    sync::{Arc, RwLock},
     thread,
     time::Duration,
 };
@@ -14,6 +15,7 @@ use crate::{
     adapter::Adapter,
     battery::Battery,
     config::{Config, load_config, load_state, save_state},
+    wake::Wake,
     wifi::Wifi,
 };
 
@@ -46,13 +48,14 @@ fn main() {
     let battery = Arc::new(Battery::find().expect("Failed to detect battery"));
     let config = Arc::new(RwLock::new(cfg));
 
-    let (tx, rx) = mpsc::channel();
+    let wake = Arc::new(Wake::new());
 
     let battery_clone = Arc::clone(&battery);
     let config_clone = Arc::clone(&config);
+    let wake_clone = Arc::clone(&wake);
 
     thread::spawn(move || {
-        monitor_battery(battery_clone, config_clone, rx);
+        monitor_battery(battery_clone, config_clone, wake_clone);
     });
 
     match (Adapter::find(), Wifi::find()) {
@@ -60,9 +63,10 @@ fn main() {
             let adapter = Arc::new(adapter);
             let wifi = Arc::new(wifi);
             let config_clone = Arc::clone(&config);
+            let wake_clone = Arc::clone(&wake);
 
             thread::spawn(move || {
-                monitor_power(adapter, wifi, config_clone);
+                monitor_power(adapter, wifi, config_clone, wake_clone);
             });
         }
 
@@ -77,14 +81,16 @@ fn main() {
         }
     }
 
-    if let Err(err) = ipc::run_server(config, battery, tx) {
+    if let Err(err) = ipc::run_server(config, battery, wake) {
         log::error!("Failed to start IPC server: {err}");
         std::process::exit(1);
     }
 }
 
-fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc::Receiver<()>) {
+fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
     log::info!("Started battery monitoring thread");
+
+    let mut last_seen = 0;
 
     loop {
         let (charge_limit, enable_periodic_full_charge, full_charge_period) = {
@@ -102,7 +108,7 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
 
             Err(err) => {
                 log::error!("Failed to read battery capacity: {err}");
-                let _ = rx.recv_timeout(Duration::from_secs(60));
+                wake.wait_timeout(&mut last_seen, Duration::from_secs(60));
                 continue;
             }
         };
@@ -181,14 +187,19 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
             }
         }
 
-        let _ = rx.recv_timeout(Duration::from_secs(30));
-
-        while rx.try_recv().is_ok() {}
+        wake.wait_timeout(&mut last_seen, Duration::from_secs(30));
     }
 }
 
-fn monitor_power(adapter: Arc<Adapter>, wifi: Arc<Wifi>, config: Arc<RwLock<Config>>) {
+fn monitor_power(
+    adapter: Arc<Adapter>,
+    wifi: Arc<Wifi>,
+    config: Arc<RwLock<Config>>,
+    wake: Arc<Wake>,
+) {
     log::info!("Started power monitoring thread");
+
+    let mut last_seen = 0;
 
     loop {
         let enabled = config.read().unwrap().disable_wifi_power_save_on_ac;
@@ -211,7 +222,7 @@ fn monitor_power(adapter: Arc<Adapter>, wifi: Arc<Wifi>, config: Arc<RwLock<Conf
                 log::error!("Failed to save state: {err}");
             }
 
-            thread::sleep(POWER_POLL_INTERVAL);
+            wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
             continue;
         }
 
@@ -267,6 +278,6 @@ fn monitor_power(adapter: Arc<Adapter>, wifi: Arc<Wifi>, config: Arc<RwLock<Conf
             log::error!("Failed to save state: {err}");
         }
 
-        thread::sleep(POWER_POLL_INTERVAL);
+        wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
     }
 }
