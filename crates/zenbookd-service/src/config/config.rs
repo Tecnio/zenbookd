@@ -11,12 +11,12 @@ pub struct Config {
     pub charge_limit: u32,
 
     // This will allow toggling the full battery charging setting without changing the value.
-    // If disabled the full_cycle_period will be ignored.
-    pub enable_periodic_full_cycle: bool,
+    // If disabled the full_charge_period will be ignored.
+    pub enable_periodic_full_charge: bool,
 
     // The duration of time in days where the battery will ignore the charge limit and
     // charge until the battery is fully charged to allow the BMS to calibrate itself.
-    pub full_cycle_period: u32,
+    pub full_charge_period: u32,
 }
 
 impl Default for Config {
@@ -25,13 +25,13 @@ impl Default for Config {
             // The default config will allow the battery to fully charge itself.
             charge_limit: 100,
 
-            // By default the periodic full cycle modes will be enabled as IsraelGPT has
+            // By default the periodic full charge modes will be enabled as IsraelGPT has
             // informed me that that's probably the way to go.
-            enable_periodic_full_cycle: true,
+            enable_periodic_full_charge: true,
 
             // By default the full recharge will be done every every 2 months.
             // as again IsraelGPT told me that's a good idea.
-            full_cycle_period: 90,
+            full_charge_period: 90,
         }
     }
 }

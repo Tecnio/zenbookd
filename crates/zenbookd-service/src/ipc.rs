@@ -91,8 +91,8 @@ fn handle_client(
             Response::Status(ServiceStatus {
                 charge_limit: config.charge_limit,
 
-                enable_periodic_full_cycle: config.enable_periodic_full_cycle,
-                full_cycle_period: config.full_cycle_period,
+                enable_periodic_full_charge: config.enable_periodic_full_charge,
+                full_charge_period: config.full_charge_period,
 
                 battery_health: battery.health().ok(),
                 battery_charge: battery.capacity().ok(),
@@ -128,8 +128,7 @@ fn handle_client(
             let mut state = load_state().unwrap_or_default();
 
             state.boost_until = if enable {
-                let until =
-                    chrono::Utc::now() + chrono::Duration::hours(BOOST_DURATION_HOURS);
+                let until = chrono::Utc::now() + chrono::Duration::hours(BOOST_DURATION_HOURS);
 
                 log::info!("Boost enabled until {until} (or until fully charged)");
                 Some(until)

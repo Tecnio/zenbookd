@@ -59,13 +59,13 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
     log::info!("Started battery monitoring thread");
 
     loop {
-        let (charge_limit, enable_periodic_full_cycle, full_cycle_period) = {
+        let (charge_limit, enable_periodic_full_charge, full_charge_period) = {
             let cfg = config.read().unwrap();
 
             (
                 cfg.charge_limit,
-                cfg.enable_periodic_full_cycle,
-                cfg.full_cycle_period,
+                cfg.enable_periodic_full_charge,
+                cfg.full_charge_period,
             )
         };
 
@@ -87,13 +87,13 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
         if current_capacity >= 100 {
             // Avoid constant updates if staying at 100
             if state
-                .last_full_cycle
+                .last_full_charge
                 .is_none_or(|last| (now - last).num_minutes() > 60)
             {
-                state.last_full_cycle = Some(now);
+                state.last_full_charge = Some(now);
                 state_dirty = true;
 
-                log::info!("Updated last full charge cycle timestamp");
+                log::info!("Updated last full charge timestamp");
             }
         }
 
@@ -117,19 +117,19 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
 
         let mut target_threshold = charge_limit;
 
-        if enable_periodic_full_cycle {
-            let needs_full_cycle = match state.last_full_cycle {
+        if enable_periodic_full_charge {
+            let needs_full_charge = match state.last_full_charge {
                 Some(last) => {
                     let days_since = (now - last).num_days();
 
-                    days_since >= full_cycle_period as i64
+                    days_since >= full_charge_period as i64
                 }
 
-                None => true, // Never had a full cycle or state lost
+                None => true, // Never had a full charge or state lost
             };
 
-            if needs_full_cycle {
-                log::debug!("Periodic full cycle needed, setting threshold to 100");
+            if needs_full_charge {
+                log::debug!("Periodic full charge needed, setting threshold to 100");
                 target_threshold = 100;
             }
         }

@@ -1,7 +1,7 @@
 # zenbookd
 > Daemon and CLI tool for my Zenbook's battery charge limit
 
-Because Linux is a dysfunctional desktop experience I cannot have a charge limit applied in a matter that isn't a JavaScript vibe slop shell extension or straight up dysfunctional and not persistent I had to make it myself (like everything else)
+Because Linux is a dysfunctional desktop experience I cannot have a charge limit applied in a matter that isn't a JavaScript vibe slop shell extension or a non-persistent setting in a shitty settings page so here we are. 
 
 ## Install
 
@@ -27,14 +27,14 @@ zenbookd boost --stop      # cancel an active boost early
 charge_limit = 80
 
 # Periodically charge to 100% to let the BMS recalibrate.
-enable_periodic_full_cycle = true
+enable_periodic_full_charge = true
 
 # How often that full charge happens, in days.
-full_cycle_period = 30
+full_charge_period = 30
 ```
 
 Changes made through the CLI are written back here, so edits and commands stay in
-sync. The daemon keeps its own state (last full cycle, any active boost) in
+sync. The daemon keeps its own state (last full charge, any active boost) in
 `/var/lib/zenbookd/state.toml`.
 
 ## License

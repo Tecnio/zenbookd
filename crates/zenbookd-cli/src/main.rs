@@ -87,13 +87,16 @@ fn main() {
                 status.charge_limit.to_string().green()
             );
 
-            let periodic_info = if status.enable_periodic_full_cycle {
-                format!("Every {} days", status.full_cycle_period.to_string().cyan())
+            let periodic_info = if status.enable_periodic_full_charge {
+                format!(
+                    "Every {} days",
+                    status.full_charge_period.to_string().cyan()
+                )
             } else {
                 "Disabled".yellow().to_string()
             };
 
-            println!("  {:<22} {}", "Periodic Full Cycle:".bold(), periodic_info);
+            println!("  {:<22} {}", "Periodic Full Charge:".bold(), periodic_info);
 
             let boost_info = match status.boost_until {
                 Some(until) => {

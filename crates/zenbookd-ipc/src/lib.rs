@@ -24,8 +24,8 @@ pub enum Request {
 pub struct ServiceStatus {
     pub charge_limit: u32,
 
-    pub enable_periodic_full_cycle: bool,
-    pub full_cycle_period: u32,
+    pub enable_periodic_full_charge: bool,
+    pub full_charge_period: u32,
 
     pub battery_health: Option<u32>,
     pub battery_charge: Option<u32>,
