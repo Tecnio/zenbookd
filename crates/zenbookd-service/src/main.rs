@@ -80,23 +80,39 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
         };
 
         let mut state = load_state().unwrap_or_default();
+        let mut state_dirty = false;
+
+        let now = chrono::Utc::now();
 
         if current_capacity >= 100 {
-            let now = chrono::Utc::now();
-
             // Avoid constant updates if staying at 100
             if state
                 .last_full_cycle
                 .is_none_or(|last| (now - last).num_minutes() > 60)
             {
                 state.last_full_cycle = Some(now);
+                state_dirty = true;
 
-                if let Err(err) = save_state(&state) {
-                    log::error!("Failed to save state: {err}");
-                } else {
-                    log::info!("Updated last full charge cycle timestamp");
-                }
+                log::info!("Updated last full charge cycle timestamp");
             }
+        }
+
+        let boost_active = match state.boost_until {
+            Some(until) if now < until && current_capacity < 100 => true,
+
+            Some(_) => {
+                state.boost_until = None;
+                state_dirty = true;
+
+                log::info!("Boost finished, restoring charge limit");
+                false
+            }
+
+            None => false,
+        };
+
+        if state_dirty && let Err(err) = save_state(&state) {
+            log::error!("Failed to save state: {err}");
         }
 
         let mut target_threshold = charge_limit;
@@ -104,7 +120,7 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
         if enable_periodic_full_cycle {
             let needs_full_cycle = match state.last_full_cycle {
                 Some(last) => {
-                    let days_since = (chrono::Utc::now() - last).num_days();
+                    let days_since = (now - last).num_days();
 
                     days_since >= full_cycle_period as i64
                 }
@@ -116,6 +132,11 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, rx: mpsc:
                 log::debug!("Periodic full cycle needed, setting threshold to 100");
                 target_threshold = 100;
             }
+        }
+
+        if boost_active {
+            log::debug!("Boost active, setting threshold to 100");
+            target_threshold = 100;
         }
 
         let current_threshold = battery.threshold().unwrap_or(100);

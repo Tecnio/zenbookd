@@ -14,6 +14,7 @@ User=root
 Group=root
 
 StateDirectory=zenbookd
+
 Environment=CONFIG_DIR=/etc/zenbookd
 Environment=STATE_DIR=/var/lib/zenbookd
 Environment=ZENBOOKD_SOCKET=/run/zenbookd.sock

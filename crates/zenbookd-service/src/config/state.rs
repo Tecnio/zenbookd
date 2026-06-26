@@ -8,6 +8,9 @@ use crate::config::{ConfigLoadError, ConfigSaveError};
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub last_full_cycle: Option<DateTime<Utc>>,
+
+    #[serde(default)]
+    pub boost_until: Option<DateTime<Utc>>,
 }
 
 pub fn load_state() -> Result<State, ConfigLoadError> {

@@ -24,6 +24,13 @@ enum Commands {
         #[arg(value_parser = clap::value_parser!(u32).range(0..=100))]
         limit: u32,
     },
+
+    /// Charge to 100% for the next 24 hours or until full, then restore the limit
+    Boost {
+        /// Cancel an active boost and restore the charge limit immediately
+        #[arg(long)]
+        stop: bool,
+    },
 }
 
 fn send_request(request: Request) -> Result<Response, Box<dyn std::error::Error>> {
@@ -41,6 +48,7 @@ fn main() {
     let request = match &cli.command {
         Commands::Status => Request::GetStatus,
         Commands::SetLimit { limit } => Request::SetChargeLimit(*limit),
+        Commands::Boost { stop } => Request::SetBoost(!stop),
     };
 
     match send_request(request) {
@@ -86,6 +94,34 @@ fn main() {
             };
 
             println!("  {:<22} {}", "Periodic Full Cycle:".bold(), periodic_info);
+
+            let boost_info = match status.boost_until {
+                Some(until) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    let remaining = until - now;
+
+                    if remaining > 0 {
+                        let hours = remaining / 3600;
+                        let minutes = (remaining % 3600) / 60;
+
+                        format!(
+                            "Active ({}h {}m left or until full)",
+                            hours.to_string().cyan(),
+                            minutes.to_string().cyan()
+                        )
+                    } else {
+                        "Active".cyan().to_string()
+                    }
+                }
+
+                None => "Inactive".yellow().to_string(),
+            };
+
+            println!("  {:<22} {}", "Boost:".bold(), boost_info);
         }
 
         Ok(Response::Ok) => {

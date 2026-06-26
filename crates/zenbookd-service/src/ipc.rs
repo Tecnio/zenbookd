@@ -12,8 +12,10 @@ use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
 
 use crate::{
     battery::Battery,
-    config::{Config, save_config},
+    config::{Config, load_state, save_config, save_state},
 };
+
+const BOOST_DURATION_HOURS: i64 = 24;
 
 pub fn run_server(
     config: Arc<RwLock<Config>>,
@@ -81,6 +83,11 @@ fn handle_client(
         Request::GetStatus => {
             let config = config.read().unwrap();
 
+            let boost_until = load_state()
+                .unwrap_or_default()
+                .boost_until
+                .map(|until| until.timestamp());
+
             Response::Status(ServiceStatus {
                 charge_limit: config.charge_limit,
 
@@ -89,6 +96,8 @@ fn handle_client(
 
                 battery_health: battery.health().ok(),
                 battery_charge: battery.capacity().ok(),
+
+                boost_until,
             })
         }
 
@@ -111,6 +120,34 @@ fn handle_client(
                     log::error!("Failed to save config: {err}");
 
                     Response::Error(format!("Failed to save config: {err}"))
+                }
+            }
+        }
+
+        Request::SetBoost(enable) => {
+            let mut state = load_state().unwrap_or_default();
+
+            state.boost_until = if enable {
+                let until =
+                    chrono::Utc::now() + chrono::Duration::hours(BOOST_DURATION_HOURS);
+
+                log::info!("Boost enabled until {until} (or until fully charged)");
+                Some(until)
+            } else {
+                log::info!("Boost cancelled");
+                None
+            };
+
+            match save_state(&state) {
+                Ok(_) => {
+                    let _ = tx.send(());
+                    Response::Ok
+                }
+
+                Err(err) => {
+                    log::error!("Failed to save state: {err}");
+
+                    Response::Error(format!("Failed to save state: {err}"))
                 }
             }
         }

@@ -17,6 +17,7 @@ pub type Result<T> = std::result::Result<T, IpcError>;
 pub enum Request {
     GetStatus,
     SetChargeLimit(u32),
+    SetBoost(bool),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +29,8 @@ pub struct ServiceStatus {
 
     pub battery_health: Option<u32>,
     pub battery_charge: Option<u32>,
+
+    pub boost_until: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -17,10 +17,10 @@ authors = ["Tecnio <50290580+Tecnio@users.noreply.github.com>"]
 license = "MIT"
 
 [workspace.dependencies]
-log = "0.4.32"
+log = "0.4.33"
 
 env_logger = {
-    version = "0.11.10",
+    version = "0.11.11",
     default-features = false,
     features = ["auto-color"]
 }
