@@ -38,6 +38,10 @@ impl Wifi {
         Err(WifiError::NotFound)
     }
 
+    pub fn interface(&self) -> &str {
+        &self.interface
+    }
+
     pub fn power_save(&self) -> Result<bool, WifiReadError> {
         let output = Command::new(IW)
             .args(["dev", &self.interface, "get", "power_save"])

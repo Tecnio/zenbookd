@@ -58,28 +58,12 @@ fn main() {
         monitor_battery(battery_clone, config_clone, wake_clone);
     });
 
-    match (Adapter::find(), Wifi::find()) {
-        (Ok(adapter), Ok(wifi)) => {
-            let adapter = Arc::new(adapter);
-            let wifi = Arc::new(wifi);
-            let config_clone = Arc::clone(&config);
-            let wake_clone = Arc::clone(&wake);
+    let config_clone = Arc::clone(&config);
+    let wake_clone = Arc::clone(&wake);
 
-            thread::spawn(move || {
-                monitor_power(adapter, wifi, config_clone, wake_clone);
-            });
-        }
-
-        (adapter, wifi) => {
-            if let Err(err) = adapter {
-                log::warn!("AC adapter not available, skipping Wi-Fi power saving: {err}");
-            }
-
-            if let Err(err) = wifi {
-                log::warn!("Wireless interface not available, skipping Wi-Fi power saving: {err}");
-            }
-        }
-    }
+    thread::spawn(move || {
+        monitor_power(config_clone, wake_clone);
+    });
 
     if let Err(err) = ipc::run_server(config, battery, wake) {
         log::error!("Failed to start IPC server: {err}");
@@ -191,18 +175,25 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, wake: Arc
     }
 }
 
-fn monitor_power(
-    adapter: Arc<Adapter>,
-    wifi: Arc<Wifi>,
-    config: Arc<RwLock<Config>>,
-    wake: Arc<Wake>,
-) {
+fn monitor_power(config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
     log::info!("Started power monitoring thread");
 
     let mut last_seen = 0;
 
+    let mut devices = None;
+    let mut reported = false;
+
     loop {
         let enabled = config.read().unwrap().disable_wifi_power_save_on_ac;
+
+        if devices.is_none() && enabled {
+            devices = find_devices(&mut reported);
+        }
+
+        let Some((adapter, wifi)) = &devices else {
+            wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
+            continue;
+        };
 
         let mut state = load_state().unwrap_or_default();
         let mut state_dirty = false;
@@ -231,47 +222,55 @@ fn monitor_power(
 
             Err(err) => {
                 log::error!("Failed to read AC adapter state: {err}");
-                thread::sleep(POWER_POLL_INTERVAL);
+                wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
                 continue;
             }
         };
 
-        match (online, state.wifi_power_save_restore) {
-            (true, None) => {
-                let current = match wifi.power_save() {
-                    Ok(current) => current,
+        let current = match wifi.power_save() {
+            Ok(current) => current,
 
-                    Err(err) => {
-                        log::error!("Failed to read Wi-Fi power save: {err}");
-                        thread::sleep(POWER_POLL_INTERVAL);
-                        continue;
-                    }
-                };
-
-                if current {
-                    log::info!("On AC power, disabling Wi-Fi power save");
-
-                    if let Err(err) = wifi.set_power_save(false) {
-                        log::error!("Failed to disable Wi-Fi power save: {err}");
-                    } else {
-                        state.wifi_power_save_restore = Some(current);
-                        state_dirty = true;
-                    }
-                }
+            Err(err) => {
+                log::error!("Failed to read Wi-Fi power save: {err}");
+                wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
+                continue;
             }
+        };
 
-            (false, Some(original)) => {
-                log::info!("On battery power, restoring Wi-Fi power save");
+        // The interface resets power saving to the driver default on every boot, so what we want is
+        // decided against the interface itself. The stored value is only the original to hand back
+        // when leaving AC, never a record of what is currently applied.
+        if online {
+            if current {
+                log::info!("On AC power, disabling Wi-Fi power save");
 
-                if let Err(err) = wifi.set_power_save(original) {
-                    log::error!("Failed to restore Wi-Fi power save: {err}");
-                } else {
-                    state.wifi_power_save_restore = None;
+                if let Err(err) = wifi.set_power_save(false) {
+                    log::error!("Failed to disable Wi-Fi power save: {err}");
+                } else if state.wifi_power_save_restore.is_none() {
+                    state.wifi_power_save_restore = Some(current);
                     state_dirty = true;
                 }
             }
+        } else if let Some(original) = state.wifi_power_save_restore {
+            let restored = if current == original {
+                true
+            } else {
+                log::info!("On battery power, restoring Wi-Fi power save");
 
-            _ => {}
+                match wifi.set_power_save(original) {
+                    Ok(()) => true,
+
+                    Err(err) => {
+                        log::error!("Failed to restore Wi-Fi power save: {err}");
+                        false
+                    }
+                }
+            };
+
+            if restored {
+                state.wifi_power_save_restore = None;
+                state_dirty = true;
+            }
         }
 
         if state_dirty && let Err(err) = save_state(&state) {
@@ -279,5 +278,32 @@ fn monitor_power(
         }
 
         wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
+    }
+}
+
+fn find_devices(reported: &mut bool) -> Option<(Adapter, Wifi)> {
+    match (Adapter::find(), Wifi::find()) {
+        (Ok(adapter), Ok(wifi)) => {
+            log::info!("Using wireless interface {}", wifi.interface());
+            *reported = false;
+
+            Some((adapter, wifi))
+        }
+
+        (adapter, wifi) => {
+            if !*reported {
+                if let Err(err) = adapter {
+                    log::warn!("AC adapter not available, waiting for it: {err}");
+                }
+
+                if let Err(err) = wifi {
+                    log::warn!("Wireless interface not available, waiting for it: {err}");
+                }
+
+                *reported = true;
+            }
+
+            None
+        }
     }
 }
