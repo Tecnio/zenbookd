@@ -4,7 +4,7 @@
 set -e
 
 echo "Building zenbookd..."
-cargo build --release
+RUSTFLAGS="-C target-cpu=native" cargo build --release
 
 echo "Installing binaries..."
 sudo cp target/release/zenbookd-service /usr/local/bin/
