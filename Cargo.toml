@@ -25,10 +25,10 @@ env_logger = {
     features = ["auto-color"]
 }
 
-thiserror = "2.0.18"
+thiserror = "2.0.19"
 
 serde = {
-    version = "1.0.228",
+    version = "1.0.229",
     features = ["derive"]
 }
 
