@@ -20,8 +20,8 @@ enum Commands {
 
     /// Set the maximum battery charge limit
     SetLimit {
-        /// Charge limit percentage (0-100)
-        #[arg(value_parser = clap::value_parser!(u32).range(0..=100))]
+        /// Charge limit percentage (1-100)
+        #[arg(value_parser = clap::value_parser!(u32).range(1..=100))]
         limit: u32,
     },
 

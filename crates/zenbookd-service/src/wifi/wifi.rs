@@ -1,4 +1,8 @@
-use std::{fs, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::wifi::{WifiError, WifiReadError, WifiSetError};
 
@@ -14,19 +18,25 @@ pub struct Wifi {
 
 impl Wifi {
     pub fn find() -> Result<Wifi, WifiError> {
-        let read_dir = fs::read_dir(NET)?;
+        Self::find_in(Path::new(NET))
+    }
 
-        for entry in read_dir.filter_map(Result::ok) {
-            let path = entry.path();
+    fn find_in(root: &Path) -> Result<Wifi, WifiError> {
+        let mut paths: Vec<PathBuf> = fs::read_dir(root)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect();
 
+        paths.sort();
+
+        for path in paths {
             if !path.join(WIRELESS_KEY).exists() {
                 continue;
             }
 
-            let name = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .ok_or(WifiError::NameParseError)?;
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
 
             let wifi = Wifi {
                 interface: name.to_string(),
@@ -72,5 +82,35 @@ impl Wifi {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_the_wireless_interface() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(tmp.path().join("eth0")).unwrap();
+        fs::create_dir_all(tmp.path().join("wlan0").join(WIRELESS_KEY)).unwrap();
+
+        let wifi = Wifi::find_in(tmp.path()).unwrap();
+
+        assert_eq!(wifi.interface(), "wlan0");
+    }
+
+    #[test]
+    fn reports_not_found_without_a_wireless_interface() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(tmp.path().join("eth0")).unwrap();
+        fs::create_dir_all(tmp.path().join("lo")).unwrap();
+
+        assert!(matches!(
+            Wifi::find_in(tmp.path()),
+            Err(WifiError::NotFound)
+        ));
     }
 }

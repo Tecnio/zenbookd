@@ -2,11 +2,12 @@ mod adapter;
 mod battery;
 mod config;
 mod ipc;
+mod policy;
 mod wake;
 mod wifi;
 
 use std::{
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -14,7 +15,7 @@ use std::{
 use crate::{
     adapter::Adapter,
     battery::Battery,
-    config::{Config, load_config, load_state, save_state},
+    config::{Config, State, load_config, load_state, persist_state},
     wake::Wake,
     wifi::Wifi,
 };
@@ -47,45 +48,66 @@ fn main() {
 
     let battery = Arc::new(Battery::find().expect("Failed to detect battery"));
     let config = Arc::new(RwLock::new(cfg));
+    let state = Arc::new(Mutex::new(load_initial_state()));
 
     let wake = Arc::new(Wake::new());
 
     let battery_clone = Arc::clone(&battery);
     let config_clone = Arc::clone(&config);
+    let state_clone = Arc::clone(&state);
     let wake_clone = Arc::clone(&wake);
 
     thread::spawn(move || {
-        monitor_battery(battery_clone, config_clone, wake_clone);
+        monitor_battery(battery_clone, config_clone, state_clone, wake_clone);
     });
 
     let config_clone = Arc::clone(&config);
+    let state_clone = Arc::clone(&state);
     let wake_clone = Arc::clone(&wake);
 
     thread::spawn(move || {
-        monitor_power(config_clone, wake_clone);
+        monitor_power(config_clone, state_clone, wake_clone);
     });
 
-    if let Err(err) = ipc::run_server(config, battery, wake) {
+    if let Err(err) = ipc::run_server(config, battery, state, wake) {
         log::error!("Failed to start IPC server: {err}");
         std::process::exit(1);
     }
 }
 
-fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
+fn load_initial_state() -> State {
+    match load_state() {
+        Ok(state) => state,
+
+        Err(err) => {
+            use config::ConfigLoadError::*;
+
+            match err {
+                Invalid(err) => {
+                    log::error!("Invalid or malformed state file, starting fresh: {err}")
+                }
+                IoError(err) => log::error!("Failed to read state file, starting fresh: {err}"),
+
+                NotFound => log::debug!("No state file found, starting fresh"),
+            }
+
+            State::default()
+        }
+    }
+}
+
+fn monitor_battery(
+    battery: Arc<Battery>,
+    config: Arc<RwLock<Config>>,
+    state: Arc<Mutex<State>>,
+    wake: Arc<Wake>,
+) {
     log::info!("Started battery monitoring thread");
 
     let mut last_seen = 0;
 
     loop {
-        let (charge_limit, enable_periodic_full_charge, full_charge_period) = {
-            let cfg = config.read().unwrap();
-
-            (
-                cfg.charge_limit,
-                cfg.enable_periodic_full_charge,
-                cfg.full_charge_period,
-            )
-        };
+        let cfg = config.read().unwrap().clone();
 
         let current_capacity = match battery.capacity() {
             Ok(cap) => cap,
@@ -97,65 +119,17 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, wake: Arc
             }
         };
 
-        let mut state = load_state().unwrap_or_default();
-        let mut state_dirty = false;
+        let target_threshold = {
+            let mut state = state.lock().unwrap();
 
-        let now = chrono::Utc::now();
+            let decision = policy::decide(&cfg, &mut state, current_capacity, chrono::Utc::now());
 
-        if current_capacity >= 100 {
-            // Avoid constant updates if staying at 100
-            if state
-                .last_full_charge
-                .is_none_or(|last| (now - last).num_minutes() > 60)
-            {
-                state.last_full_charge = Some(now);
-                state_dirty = true;
-
-                log::info!("Updated last full charge timestamp");
-            }
-        }
-
-        let boost_active = match state.boost_until {
-            Some(until) if now < until && current_capacity < 100 => true,
-
-            Some(_) => {
-                state.boost_until = None;
-                state_dirty = true;
-
-                log::info!("Boost finished, restoring charge limit");
-                false
+            if decision.state_dirty {
+                persist_state(&state);
             }
 
-            None => false,
+            decision.target_threshold
         };
-
-        if state_dirty && let Err(err) = save_state(&state) {
-            log::error!("Failed to save state: {err}");
-        }
-
-        let mut target_threshold = charge_limit;
-
-        if enable_periodic_full_charge {
-            let needs_full_charge = match state.last_full_charge {
-                Some(last) => {
-                    let days_since = (now - last).num_days();
-
-                    days_since >= full_charge_period as i64
-                }
-
-                None => true, // Never had a full charge or state lost
-            };
-
-            if needs_full_charge {
-                log::debug!("Periodic full charge needed, setting threshold to 100");
-                target_threshold = 100;
-            }
-        }
-
-        if boost_active {
-            log::debug!("Boost active, setting threshold to 100");
-            target_threshold = 100;
-        }
 
         let current_threshold = battery.threshold().unwrap_or(100);
 
@@ -175,7 +149,7 @@ fn monitor_battery(battery: Arc<Battery>, config: Arc<RwLock<Config>>, wake: Arc
     }
 }
 
-fn monitor_power(config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
+fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<State>>, wake: Arc<Wake>) {
     log::info!("Started power monitoring thread");
 
     let mut last_seen = 0;
@@ -195,23 +169,23 @@ fn monitor_power(config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
             continue;
         };
 
-        let mut state = load_state().unwrap_or_default();
-        let mut state_dirty = false;
-
         if !enabled {
-            if let Some(original) = state.wifi_power_save_restore.take() {
+            let mut state = state.lock().unwrap();
+
+            // Only clear the stored value once the interface has actually been
+            // handed back, so a failed restore is retried on the next tick.
+            if let Some(original) = state.wifi_power_save_restore {
                 log::info!("Wi-Fi power saving feature disabled, restoring original state");
 
                 if let Err(err) = wifi.set_power_save(original) {
                     log::error!("Failed to restore Wi-Fi power save: {err}");
                 } else {
-                    state_dirty = true;
+                    state.wifi_power_save_restore = None;
+                    persist_state(&state);
                 }
             }
 
-            if state_dirty && let Err(err) = save_state(&state) {
-                log::error!("Failed to save state: {err}");
-            }
+            drop(state);
 
             wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
             continue;
@@ -236,6 +210,9 @@ fn monitor_power(config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
                 continue;
             }
         };
+
+        let mut state = state.lock().unwrap();
+        let mut state_dirty = false;
 
         // The interface resets power saving to the driver default on every boot, so what we want is
         // decided against the interface itself. The stored value is only the original to hand back
@@ -273,9 +250,11 @@ fn monitor_power(config: Arc<RwLock<Config>>, wake: Arc<Wake>) {
             }
         }
 
-        if state_dirty && let Err(err) = save_state(&state) {
-            log::error!("Failed to save state: {err}");
+        if state_dirty {
+            persist_state(&state);
         }
+
+        drop(state);
 
         wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
     }

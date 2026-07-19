@@ -23,7 +23,7 @@ zenbookd boost --stop      # cancel an active boost early
 `/etc/zenbookd/config.toml`:
 
 ```toml
-# Percentage (0-100) the battery is held at.
+# Percentage (1-100) the battery is held at.
 charge_limit = 80
 
 # Periodically charge to 100% to let the BMS recalibrate.

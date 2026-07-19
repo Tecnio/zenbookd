@@ -5,22 +5,25 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::Path,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 
 use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
 
 use crate::{
     battery::Battery,
-    config::{Config, load_state, save_config, save_state},
+    config::{Config, State, save_config, save_state, validate_charge_limit},
     wake::Wake,
 };
 
 const BOOST_DURATION_HOURS: i64 = 24;
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run_server(
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
+    state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
 ) -> std::io::Result<()> {
     let socket_path = socket_path();
@@ -41,10 +44,21 @@ pub fn run_server(
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                if let Err(err) = stream.set_read_timeout(Some(CLIENT_TIMEOUT)) {
+                    log::error!("Failed to set IPC read timeout: {err}");
+                    continue;
+                }
+
+                if let Err(err) = stream.set_write_timeout(Some(CLIENT_TIMEOUT)) {
+                    log::error!("Failed to set IPC write timeout: {err}");
+                    continue;
+                }
+
                 if let Err(err) = handle_client(
                     stream,
                     Arc::clone(&config),
                     Arc::clone(&battery),
+                    Arc::clone(&state),
                     Arc::clone(&wake),
                 ) {
                     log::error!("Error handling IPC client: {err}");
@@ -64,16 +78,21 @@ fn handle_client(
     mut stream: UnixStream,
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
+    state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
 ) -> std::io::Result<()> {
     let request: Request = match zenbookd_ipc::receive_message(&mut stream) {
         Ok(req) => req,
 
         Err(err) => {
-            if let zenbookd_ipc::IpcError::Json(err) = err {
+            // An oversized or truncated frame leaves the stream desynced, so the
+            // only safe reply is none — close and let the client reconnect.
+            if let zenbookd_ipc::IpcError::Json(err) = &err {
                 let response = Response::Error(format!("Invalid request: {err}"));
 
                 let _ = zenbookd_ipc::send_message(&mut stream, &response);
+            } else {
+                log::warn!("Dropping IPC client: {err}");
             }
 
             return Ok(());
@@ -82,18 +101,19 @@ fn handle_client(
 
     let response = match request {
         Request::GetStatus => {
-            let config = config.read().unwrap();
+            let cfg = config.read().unwrap().clone();
 
-            let boost_until = load_state()
-                .unwrap_or_default()
+            let boost_until = state
+                .lock()
+                .unwrap()
                 .boost_until
                 .map(|until| until.timestamp());
 
             Response::Status(ServiceStatus {
-                charge_limit: config.charge_limit,
+                charge_limit: cfg.charge_limit,
 
-                enable_periodic_full_charge: config.enable_periodic_full_charge,
-                full_charge_period: config.full_charge_period,
+                enable_periodic_full_charge: cfg.enable_periodic_full_charge,
+                full_charge_period: cfg.full_charge_period,
 
                 battery_health: battery.health().ok(),
                 battery_charge: battery.capacity().ok(),
@@ -105,25 +125,31 @@ fn handle_client(
         Request::SetChargeLimit(limit) => {
             log::info!("Requested charge limit: {}", limit);
 
-            let mut config = config.write().unwrap();
-            config.charge_limit = limit;
+            if let Err(err) = validate_charge_limit(limit) {
+                log::warn!("Rejected charge limit: {err}");
 
-            let result = save_config(&config);
-            drop(config);
+                Response::Error(err)
+            } else {
+                let mut config = config.write().unwrap();
+                config.charge_limit = limit;
 
-            match result {
-                Ok(_) => Response::Ok,
+                let result = save_config(&config);
+                drop(config);
 
-                Err(err) => {
-                    log::error!("Failed to save config: {err}");
+                match result {
+                    Ok(_) => Response::Ok,
 
-                    Response::Error(format!("Failed to save config: {err}"))
+                    Err(err) => {
+                        log::error!("Failed to save config: {err}");
+
+                        Response::Error(format!("Failed to save config: {err}"))
+                    }
                 }
             }
         }
 
         Request::SetBoost(enable) => {
-            let mut state = load_state().unwrap_or_default();
+            let mut state = state.lock().unwrap();
 
             state.boost_until = if enable {
                 let until = chrono::Utc::now() + chrono::Duration::hours(BOOST_DURATION_HOURS);

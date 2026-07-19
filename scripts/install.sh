@@ -18,7 +18,7 @@ if [ ! -f /etc/zenbookd/config.toml ]; then
     sudo tee /etc/zenbookd/config.toml > /dev/null <<EOF
 # zenbookd configuration
 
-# The charge limit in percentage between 0-100.
+# The charge limit in percentage between 1-100.
 charge_limit = 80
 
 # Whether to periodically charge to 100% to calibrate the BMS.

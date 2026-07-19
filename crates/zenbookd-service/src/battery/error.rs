@@ -5,9 +5,6 @@ pub enum BatteryError {
     #[error("Battery not found")]
     NotFound,
 
-    #[error("Failed to parse name of file/folder")]
-    NameParseError,
-
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
@@ -23,7 +20,7 @@ pub enum BatteryReadError {
 
 #[derive(Debug, Error)]
 pub enum ThresholdSetError {
-    #[error("Invalid threshold '{0}' value must be between 0-100'")]
+    #[error("Invalid threshold '{0}', value must be between 1-100")]
     InvalidValue(u32),
 
     #[error("IO error: {0}")]
