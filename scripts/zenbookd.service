@@ -4,20 +4,47 @@ After=network.target
 
 [Service]
 Type=simple
-
 ExecStart=/usr/local/bin/zenbookd-service
-
 Restart=always
 RestartSec=5
 
-User=root
-Group=root
+User=zenbookd
+Group=zenbookd
 
+# iw(8) power_save needs netlink admin; battery sysfs is opened via udev group write.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+
+ConfigurationDirectory=zenbookd
 StateDirectory=zenbookd
+RuntimeDirectory=zenbookd
 
 Environment=CONFIG_DIR=/etc/zenbookd
 Environment=STATE_DIR=/var/lib/zenbookd
-Environment=ZENBOOKD_SOCKET=/run/zenbookd.sock
+Environment=ZENBOOKD_SOCKET=/run/zenbookd/zenbookd.sock
+
+# Filesystem lockdown - ProtectKernelTunables makes /sys read-only, so punch a
+# hole for power_supply. DAC (udev g+w on the threshold attr) still limits writes.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ReadWritePaths=-/sys/class/power_supply
+
+PrivateDevices=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+ACTION=="add|change", SUBSYSTEM=="power_supply", KERNEL=="BAT*", \
+  TEST=="charge_control_end_threshold", \
+  RUN+="/usr/bin/chgrp zenbookd /sys/class/power_supply/%k/charge_control_end_threshold", \
+  RUN+="/usr/bin/chmod g+w /sys/class/power_supply/%k/charge_control_end_threshold"

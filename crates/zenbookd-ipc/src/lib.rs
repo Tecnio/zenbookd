@@ -44,7 +44,7 @@ pub enum Response {
     Error(String),
 }
 
-pub const DEFAULT_SOCKET_PATH: &str = "/run/zenbookd.sock";
+pub const DEFAULT_SOCKET_PATH: &str = "/run/zenbookd/zenbookd.sock";
 pub const MAX_MESSAGE_LEN: usize = 64 * 1024;
 
 pub fn socket_path() -> String {

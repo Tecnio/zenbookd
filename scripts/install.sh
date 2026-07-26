@@ -10,6 +10,19 @@ echo "Installing binaries..."
 sudo cp target/release/zenbookd-service /usr/local/bin/
 sudo cp target/release/zenbookd /usr/local/bin/
 
+echo "Ensuring zenbookd system user exists..."
+if ! id zenbookd &>/dev/null; then
+    sudo useradd --system --no-create-home \
+        --home-dir /var/lib/zenbookd \
+        --shell /usr/sbin/nologin \
+        --comment "ASUS Zenbook battery daemon" \
+        zenbookd
+
+    echo "Created system user zenbookd"
+else
+    echo "System user zenbookd already exists"
+fi
+
 echo "Setting up configuration and state..."
 sudo mkdir -p /etc/zenbookd
 sudo mkdir -p /var/lib/zenbookd
@@ -40,12 +53,19 @@ EOF
     echo "Initialized battery state at /var/lib/zenbookd/state.toml"
 fi
 
+sudo chown -R zenbookd:zenbookd /etc/zenbookd /var/lib/zenbookd
+
+echo "Installing udev rule for charge threshold access..."
+sudo cp scripts/99-zenbookd-battery.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger -c add -s power_supply
+
 echo "Installing systemd service..."
 sudo cp scripts/zenbookd.service /etc/systemd/system/
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now zenbookd.service
 
-echo "zenbookd has been installed and started."
+echo "zenbookd has been installed and started (running as user zenbookd)."
 echo "You can check the service status with: systemctl status zenbookd.service"
 echo "You can use the CLI tool with: zenbookd status"
