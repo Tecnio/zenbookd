@@ -7,8 +7,10 @@ use thiserror::Error;
 pub enum IpcError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
     #[error("Message too large: {0} bytes (maximum {MAX_MESSAGE_LEN})")]
     MessageTooLarge(usize),
 }
@@ -43,7 +45,6 @@ pub enum Response {
 }
 
 pub const DEFAULT_SOCKET_PATH: &str = "/run/zenbookd.sock";
-
 pub const MAX_MESSAGE_LEN: usize = 64 * 1024;
 
 pub fn socket_path() -> String {

@@ -127,9 +127,35 @@ fn main() {
             println!("  {:<22} {}", "Boost:".bold(), boost_info);
         }
 
-        Ok(Response::Ok) => {
-            println!("{}", "✔ Command executed successfully.".green().bold());
-        }
+        Ok(Response::Ok) => match &cli.command {
+            Commands::SetLimit { limit } => {
+                println!(
+                    "{} Charge limit set to {}%.",
+                    "✔".green().bold(),
+                    limit.to_string().green().bold()
+                );
+            }
+
+            Commands::Boost { stop: false } => {
+                println!(
+                    "{}",
+                    "✔ Boost enabled — charging to 100% for 24h or until full, then restoring the limit."
+                        .green()
+                        .bold()
+                );
+            }
+
+            Commands::Boost { stop: true } => {
+                println!(
+                    "{}",
+                    "✔ Boost cancelled — charge limit restored.".green().bold()
+                );
+            }
+
+            Commands::Status => {
+                unreachable!("Status never returns Response::Ok");
+            }
+        },
 
         Ok(Response::Error(err)) => {
             eprintln!("{} {}", "✘ Error from service:".red().bold(), err);

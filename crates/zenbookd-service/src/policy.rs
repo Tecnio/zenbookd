@@ -11,17 +11,15 @@ pub struct Decision {
 pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>) -> Decision {
     let mut state_dirty = false;
 
-    if capacity >= 100 {
-        // Avoid constant updates if staying at 100
-        if state
+    if capacity >= 100
+        && state
             .last_full_charge
             .is_none_or(|last| (now - last).num_minutes() > 60)
-        {
-            state.last_full_charge = Some(now);
-            state_dirty = true;
+    {
+        state.last_full_charge = Some(now);
+        state_dirty = true;
 
-            log::info!("Updated last full charge timestamp");
-        }
+        log::info!("Updated last full charge timestamp");
     }
 
     let boost_active = match state.boost_until {
@@ -32,6 +30,7 @@ pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>
             state_dirty = true;
 
             log::info!("Boost finished, restoring charge limit");
+
             false
         }
 
