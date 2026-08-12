@@ -12,10 +12,14 @@ Because Linux is a dysfunctional desktop experience I cannot have a charge limit
 ## Usage
 
 ```sh
-zenbookd status            # current charge, health and config
-zenbookd set-limit 80      # hold the battery at 80%
-zenbookd boost             # charge to 100% now, restore the limit after
-zenbookd boost --stop      # cancel an active boost early
+zenbookd status                       # current charge, health and config
+zenbookd set-limit 80                 # hold the battery at 80%
+zenbookd boost                        # charge to 100% now, restore the limit after
+zenbookd boost --stop                 # cancel an active boost early
+zenbookd set-periodic-charge on       # enable/disable periodic full charge
+zenbookd set-charge-period 30         # days between periodic full charges
+zenbookd set-wifi-power-save on       # disable Wi-Fi power saving while on AC
+zenbookd reload                       # re-read config.toml without restarting
 ```
 
 ## Config
@@ -31,10 +35,15 @@ enable_periodic_full_charge = true
 
 # How often that full charge happens, in days.
 full_charge_period = 30
+
+# Disable Wi-Fi power saving while on AC power, restoring it once unplugged.
+disable_wifi_power_save_on_ac = true
 ```
 
-Changes made through the CLI are written back here, so edits and commands stay in
-sync. The daemon keeps its own state (last full charge, any active boost) in
+Changes made through the CLI are written back here, preserving comments and any
+other keys already in the file, so edits and commands stay in sync. Hand edits
+take effect after `zenbookd reload` (or a service restart). The daemon keeps
+its own state (last full charge, any active boost) in
 `/var/lib/zenbookd/state.toml`.
 
 ## License

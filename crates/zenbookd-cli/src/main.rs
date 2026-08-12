@@ -31,6 +31,33 @@ enum Commands {
         #[arg(long)]
         stop: bool,
     },
+
+    /// Enable or disable the periodic full charge
+    SetPeriodicCharge {
+        #[arg(value_enum)]
+        state: Toggle,
+    },
+
+    /// Set how many days between periodic full charges
+    SetChargePeriod {
+        #[arg(value_parser = clap::value_parser!(u32).range(1..=365))]
+        days: u32,
+    },
+
+    /// Disable Wi-Fi power saving while on AC power
+    SetWifiPowerSave {
+        #[arg(value_enum)]
+        state: Toggle,
+    },
+
+    /// Re-read /etc/zenbookd/config.toml without restarting the service
+    Reload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+enum Toggle {
+    On,
+    Off,
 }
 
 fn send_request(request: Request) -> Result<Response, Box<dyn std::error::Error>> {
@@ -49,6 +76,12 @@ fn main() {
         Commands::Status => Request::GetStatus,
         Commands::SetLimit { limit } => Request::SetChargeLimit(*limit),
         Commands::Boost { stop } => Request::SetBoost(!stop),
+        Commands::SetPeriodicCharge { state } => {
+            Request::SetPeriodicFullCharge(*state == Toggle::On)
+        }
+        Commands::SetChargePeriod { days } => Request::SetFullChargePeriod(*days),
+        Commands::SetWifiPowerSave { state } => Request::SetWifiPowerSave(*state == Toggle::On),
+        Commands::Reload => Request::ReloadConfig,
     };
 
     match send_request(request) {
@@ -217,6 +250,38 @@ fn main() {
                     "{}",
                     "✔ Boost cancelled — charge limit restored.".green().bold()
                 );
+            }
+
+            Commands::SetPeriodicCharge { state } => {
+                let message = if *state == Toggle::On {
+                    "✔ Periodic full charge enabled."
+                } else {
+                    "✔ Periodic full charge disabled."
+                };
+
+                println!("{}", message.green().bold());
+            }
+
+            Commands::SetChargePeriod { days } => {
+                println!(
+                    "{} Charge period set to {} days.",
+                    "✔".green().bold(),
+                    days.to_string().green().bold()
+                );
+            }
+
+            Commands::SetWifiPowerSave { state } => {
+                let message = if *state == Toggle::On {
+                    "✔ Wi-Fi power saving will be disabled on AC."
+                } else {
+                    "✔ Wi-Fi power saving left untouched on AC."
+                };
+
+                println!("{}", message.green().bold());
+            }
+
+            Commands::Reload => {
+                println!("{}", "✔ Configuration reloaded.".green().bold());
             }
 
             Commands::Status => {

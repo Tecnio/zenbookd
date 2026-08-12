@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +6,22 @@ use crate::config::{ConfigLoadError, ConfigSaveError};
 
 pub const MIN_CHARGE_LIMIT: u32 = 1;
 pub const MAX_CHARGE_LIMIT: u32 = 100;
+
+const DEFAULT_CONFIG_TEMPLATE: &str = "\
+# zenbookd configuration
+
+# The charge limit in percentage between 1-100.
+charge_limit = 80
+
+# Whether to periodically charge to 100% to calibrate the BMS.
+enable_periodic_full_charge = true
+
+# The period in days for the full charge.
+full_charge_period = 30
+
+# When enabled, Wi-Fi power saving is disabled while on AC power.
+disable_wifi_power_save_on_ac = true
+";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -76,14 +92,29 @@ pub fn validate_charge_limit(limit: u32) -> Result<(), String> {
     }
 }
 
-pub fn load_config() -> Result<Config, ConfigLoadError> {
-    let path = config_path();
+pub const MIN_FULL_CHARGE_PERIOD: u32 = 1;
+pub const MAX_FULL_CHARGE_PERIOD: u32 = 365;
 
+pub fn validate_full_charge_period(days: u32) -> Result<(), String> {
+    if (MIN_FULL_CHARGE_PERIOD..=MAX_FULL_CHARGE_PERIOD).contains(&days) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Full charge period must be between {MIN_FULL_CHARGE_PERIOD} and {MAX_FULL_CHARGE_PERIOD}, got {days}"
+        ))
+    }
+}
+
+pub fn load_config() -> Result<Config, ConfigLoadError> {
+    load_config_from(&config_path())
+}
+
+pub fn load_config_from(path: &Path) -> Result<Config, ConfigLoadError> {
     if !path.is_file() {
         return Err(ConfigLoadError::NotFound);
     }
 
-    let data = std::fs::read_to_string(&path)?;
+    let data = std::fs::read_to_string(path)?;
     let mut config = toml::from_str::<Config>(&data)?;
 
     config.clamp_charge_limit();
@@ -92,11 +123,27 @@ pub fn load_config() -> Result<Config, ConfigLoadError> {
 }
 
 pub fn save_config(cfg: &Config) -> Result<(), ConfigSaveError> {
-    let path = config_path();
+    save_config_to(&config_path(), cfg)
+}
 
-    let data = toml::to_string_pretty(&cfg)?;
+pub fn save_config_to(path: &Path, cfg: &Config) -> Result<(), ConfigSaveError> {
+    use toml_edit::{DocumentMut, value};
 
-    std::fs::write(path, &data).map_err(Into::into)
+    let mut doc = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.parse::<DocumentMut>().ok())
+        .unwrap_or_else(|| DEFAULT_CONFIG_TEMPLATE.parse::<DocumentMut>().unwrap());
+
+    doc["charge_limit"] = value(cfg.charge_limit as i64);
+    doc["enable_periodic_full_charge"] = value(cfg.enable_periodic_full_charge);
+    doc["full_charge_period"] = value(cfg.full_charge_period as i64);
+    doc["disable_wifi_power_save_on_ac"] = value(cfg.disable_wifi_power_save_on_ac);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(path, doc.to_string()).map_err(Into::into)
 }
 
 fn config_path() -> PathBuf {
@@ -110,6 +157,8 @@ fn config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -202,5 +251,127 @@ full_charge_period = 30
         assert!(validate_charge_limit(0).is_err());
         assert!(validate_charge_limit(101).is_err());
         assert!(validate_charge_limit(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_a_zero_day_period() {
+        assert!(validate_full_charge_period(0).is_err());
+    }
+
+    #[test]
+    fn validation_accepts_the_whole_valid_period_range() {
+        assert!(validate_full_charge_period(MIN_FULL_CHARGE_PERIOD).is_ok());
+        assert!(validate_full_charge_period(30).is_ok());
+        assert!(validate_full_charge_period(MAX_FULL_CHARGE_PERIOD).is_ok());
+    }
+
+    #[test]
+    fn saving_preserves_comments_in_the_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        fs::write(
+            &path,
+            "\
+# zenbookd configuration
+
+# The charge limit in percentage between 1-100.
+charge_limit = 80
+
+# Whether to periodically charge to 100% to calibrate the BMS.
+enable_periodic_full_charge = true
+
+# The period in days for the full charge.
+full_charge_period = 30
+",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            charge_limit: 70,
+            ..Config::default()
+        };
+
+        save_config_to(&path, &cfg).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+
+        assert!(text.contains("# The charge limit in percentage between 1-100."));
+        assert!(text.contains("charge_limit = 70"));
+    }
+
+    #[test]
+    fn saving_preserves_unknown_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        fs::write(
+            &path,
+            "\
+charge_limit = 80
+enable_periodic_full_charge = true
+full_charge_period = 30
+disable_wifi_power_save_on_ac = true
+some_future_key = \"keep me\"
+",
+        )
+        .unwrap();
+
+        save_config_to(&path, &Config::default()).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+
+        assert!(text.contains("some_future_key = \"keep me\""));
+    }
+
+    #[test]
+    fn saving_creates_a_commented_file_when_none_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nested").join("config.toml");
+
+        save_config_to(&path, &Config::default()).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+
+        assert!(path.exists());
+        assert!(text.contains('#'));
+    }
+
+    #[test]
+    fn saving_over_an_unparseable_file_still_writes_the_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        fs::write(&path, "!!! not toml").unwrap();
+
+        let cfg = Config {
+            charge_limit: 65,
+            enable_periodic_full_charge: false,
+            full_charge_period: 45,
+            disable_wifi_power_save_on_ac: false,
+        };
+
+        save_config_to(&path, &cfg).unwrap();
+
+        let loaded = load_config_from(&path).unwrap();
+
+        assert_eq!(loaded, cfg);
+    }
+
+    #[test]
+    fn saved_config_round_trips_through_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        let cfg = Config {
+            charge_limit: 55,
+            enable_periodic_full_charge: true,
+            full_charge_period: 60,
+            disable_wifi_power_save_on_ac: false,
+        };
+
+        save_config_to(&path, &cfg).unwrap();
+
+        assert_eq!(load_config_from(&path).unwrap(), cfg);
     }
 }

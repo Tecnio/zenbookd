@@ -22,6 +22,10 @@ pub enum Request {
     GetStatus,
     SetChargeLimit(u32),
     SetBoost(bool),
+    SetPeriodicFullCharge(bool),
+    SetFullChargePeriod(u32),
+    SetWifiPowerSave(bool),
+    ReloadConfig,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -108,6 +112,21 @@ mod tests {
         let decoded: Request = receive_message(&buf[..]).unwrap();
 
         assert_eq!(decoded, Request::SetChargeLimit(80));
+    }
+
+    #[test]
+    fn roundtrips_the_new_config_requests() {
+        let mut buf = Vec::new();
+        send_message(&mut buf, &Request::SetFullChargePeriod(30)).unwrap();
+
+        let decoded: Request = receive_message(&buf[..]).unwrap();
+        assert_eq!(decoded, Request::SetFullChargePeriod(30));
+
+        let mut buf = Vec::new();
+        send_message(&mut buf, &Request::ReloadConfig).unwrap();
+
+        let decoded: Request = receive_message(&buf[..]).unwrap();
+        assert_eq!(decoded, Request::ReloadConfig);
     }
 
     #[test]

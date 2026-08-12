@@ -13,7 +13,9 @@ use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
 
 use crate::{
     battery::Battery,
-    config::{Config, State, save_config, save_state, validate_charge_limit},
+    config::{
+        Config, State, save_config, save_state, validate_charge_limit, validate_full_charge_period,
+    },
     wake::Wake,
 };
 
@@ -160,6 +162,81 @@ fn handle_client(
                 }
             }
         }
+
+        Request::SetPeriodicFullCharge(enable) => {
+            let mut config = config.write().unwrap();
+            config.enable_periodic_full_charge = enable;
+
+            let result = save_config(&config);
+            drop(config);
+
+            match result {
+                Ok(_) => Response::Ok,
+
+                Err(err) => {
+                    log::error!("Failed to save config: {err}");
+
+                    Response::Error(format!("Failed to save config: {err}"))
+                }
+            }
+        }
+
+        Request::SetFullChargePeriod(days) => {
+            if let Err(err) = validate_full_charge_period(days) {
+                log::warn!("Rejected full charge period: {err}");
+
+                Response::Error(err)
+            } else {
+                let mut config = config.write().unwrap();
+                config.full_charge_period = days;
+
+                let result = save_config(&config);
+                drop(config);
+
+                match result {
+                    Ok(_) => Response::Ok,
+
+                    Err(err) => {
+                        log::error!("Failed to save config: {err}");
+
+                        Response::Error(format!("Failed to save config: {err}"))
+                    }
+                }
+            }
+        }
+
+        Request::SetWifiPowerSave(disable_on_ac) => {
+            let mut config = config.write().unwrap();
+            config.disable_wifi_power_save_on_ac = disable_on_ac;
+
+            let result = save_config(&config);
+            drop(config);
+
+            match result {
+                Ok(_) => Response::Ok,
+
+                Err(err) => {
+                    log::error!("Failed to save config: {err}");
+
+                    Response::Error(format!("Failed to save config: {err}"))
+                }
+            }
+        }
+
+        Request::ReloadConfig => match crate::config::load_config() {
+            Ok(new) => {
+                log::info!("Reloaded configuration from disk");
+                *config.write().unwrap() = new;
+
+                Response::Ok
+            }
+
+            Err(err) => {
+                log::error!("Failed to reload config: {err}");
+
+                Response::Error(format!("Failed to reload config: {err}"))
+            }
+        },
 
         Request::SetBoost(enable) => {
             let mut state = state.lock().unwrap();
