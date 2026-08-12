@@ -8,6 +8,18 @@ pub struct Decision {
     pub state_dirty: bool,
 }
 
+pub fn needs_full_charge(cfg: &Config, state: &State, now: DateTime<Utc>) -> bool {
+    if !cfg.enable_periodic_full_charge {
+        return false;
+    }
+
+    match state.last_full_charge {
+        Some(last) => (now - last).num_days() >= cfg.full_charge_period as i64,
+
+        None => true,
+    }
+}
+
 pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>) -> Decision {
     let mut state_dirty = false;
 
@@ -39,21 +51,9 @@ pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>
 
     let mut target_threshold = cfg.charge_limit;
 
-    if cfg.enable_periodic_full_charge {
-        let needs_full_charge = match state.last_full_charge {
-            Some(last) => {
-                let days_since = (now - last).num_days();
-
-                days_since >= cfg.full_charge_period as i64
-            }
-
-            None => true, // Never had a full charge or state lost
-        };
-
-        if needs_full_charge {
-            log::debug!("Periodic full charge needed, setting threshold to 100");
-            target_threshold = 100;
-        }
+    if needs_full_charge(cfg, state, now) {
+        log::debug!("Periodic full charge needed, setting threshold to 100");
+        target_threshold = 100;
     }
 
     if boost_active {
@@ -223,5 +223,42 @@ mod tests {
         let decision = decide(&cfg(80, false, 90), &mut state, 50, now());
 
         assert_eq!(decision.target_threshold, 80);
+    }
+
+    #[test]
+    fn needs_full_charge_is_false_when_the_feature_is_disabled() {
+        let state = State {
+            last_full_charge: Some(now() - chrono::Duration::days(400)),
+            ..Default::default()
+        };
+
+        assert!(!needs_full_charge(&cfg(80, false, 90), &state, now()));
+    }
+
+    #[test]
+    fn needs_full_charge_is_true_when_never_recorded() {
+        let state = State::default();
+
+        assert!(needs_full_charge(&cfg(80, true, 90), &state, now()));
+    }
+
+    #[test]
+    fn needs_full_charge_is_true_once_the_period_elapses() {
+        let state = State {
+            last_full_charge: Some(now() - chrono::Duration::days(91)),
+            ..Default::default()
+        };
+
+        assert!(needs_full_charge(&cfg(80, true, 90), &state, now()));
+    }
+
+    #[test]
+    fn needs_full_charge_is_false_before_the_period_elapses() {
+        let state = State {
+            last_full_charge: Some(now() - chrono::Duration::days(10)),
+            ..Default::default()
+        };
+
+        assert!(!needs_full_charge(&cfg(80, true, 90), &state, now()));
     }
 }

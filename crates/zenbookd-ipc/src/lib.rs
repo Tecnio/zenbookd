@@ -35,6 +35,18 @@ pub struct ServiceStatus {
     pub battery_charge: Option<u32>,
 
     pub boost_until: Option<i64>,
+
+    #[serde(default)]
+    pub applied_threshold: Option<u32>,
+
+    #[serde(default)]
+    pub last_full_charge: Option<i64>,
+
+    #[serde(default)]
+    pub calibration_active: bool,
+
+    #[serde(default)]
+    pub threshold_error: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +119,10 @@ mod tests {
             battery_health: Some(94),
             battery_charge: Some(72),
             boost_until: Some(1_768_000_000),
+            applied_threshold: Some(100),
+            last_full_charge: Some(1_767_000_000),
+            calibration_active: true,
+            threshold_error: Some("permission denied".to_string()),
         };
 
         let mut buf = Vec::new();
@@ -114,7 +130,23 @@ mod tests {
 
         let decoded: Response = receive_message(&buf[..]).unwrap();
 
-        assert!(matches!(decoded, Response::Status(s) if s.battery_charge == Some(72)));
+        assert!(matches!(decoded, Response::Status(s) if s.applied_threshold == Some(100)));
+    }
+
+    #[test]
+    fn status_from_an_older_daemon_deserializes_with_defaults() {
+        let json = r#"{"Status":{"charge_limit":80,"enable_periodic_full_charge":true,"full_charge_period":30,"battery_health":94,"battery_charge":72,"boost_until":null}}"#;
+
+        let decoded: Response = serde_json::from_str(json).unwrap();
+
+        match decoded {
+            Response::Status(s) => {
+                assert_eq!(s.applied_threshold, None);
+                assert!(!s.calibration_active);
+            }
+
+            _ => panic!("expected Response::Status"),
+        }
     }
 
     #[test]

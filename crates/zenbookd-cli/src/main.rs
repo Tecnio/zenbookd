@@ -87,6 +87,29 @@ fn main() {
                 status.charge_limit.to_string().green()
             );
 
+            if let Some(applied) = status.applied_threshold {
+                let suffix = if status.boost_until.is_some() {
+                    " (boost)"
+                } else if status.calibration_active {
+                    " (periodic calibration)"
+                } else {
+                    ""
+                };
+
+                let applied_color = if applied == status.charge_limit {
+                    applied.to_string().green()
+                } else {
+                    applied.to_string().yellow()
+                };
+
+                println!(
+                    "  {:<22} {}%{}",
+                    "Applied Threshold:".bold(),
+                    applied_color,
+                    suffix
+                );
+            }
+
             let periodic_info = if status.enable_periodic_full_charge {
                 format!(
                     "Every {} days",
@@ -97,6 +120,33 @@ fn main() {
             };
 
             println!("  {:<22} {}", "Periodic Full Charge:".bold(), periodic_info);
+
+            let last_full_charge_info = match status.last_full_charge {
+                None => "Never".yellow().to_string(),
+
+                Some(ts) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    let age_days = (now - ts) / 86_400;
+
+                    if age_days < 1 {
+                        "Today".to_string()
+                    } else if age_days < 2 {
+                        "Yesterday".to_string()
+                    } else {
+                        format!("{} days ago", age_days.to_string().cyan())
+                    }
+                }
+            };
+
+            println!(
+                "  {:<22} {}",
+                "Last Full Charge:".bold(),
+                last_full_charge_info
+            );
 
             let boost_info = match status.boost_until {
                 Some(until) => {
@@ -125,6 +175,23 @@ fn main() {
             };
 
             println!("  {:<22} {}", "Boost:".bold(), boost_info);
+
+            if let Some(err) = &status.threshold_error {
+                println!();
+
+                eprintln!(
+                    "{} {}",
+                    "⚠ Failed to apply the charge threshold:".red().bold(),
+                    err
+                );
+
+                eprintln!(
+                    "{}",
+                    "The daemon may lack write access to the battery sysfs attribute; \
+                     check that the udev rule from scripts/ is installed."
+                        .yellow()
+                );
+            }
         }
 
         Ok(Response::Ok) => match &cli.command {

@@ -25,6 +25,7 @@ pub fn run_server(
     battery: Arc<Battery>,
     state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
+    threshold_error: Arc<Mutex<Option<String>>>,
 ) -> std::io::Result<()> {
     let socket_path = socket_path();
     let path = Path::new(&socket_path);
@@ -60,6 +61,7 @@ pub fn run_server(
                     Arc::clone(&battery),
                     Arc::clone(&state),
                     Arc::clone(&wake),
+                    Arc::clone(&threshold_error),
                 ) {
                     log::error!("Error handling IPC client: {err}");
                 }
@@ -80,6 +82,7 @@ fn handle_client(
     battery: Arc<Battery>,
     state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
+    threshold_error: Arc<Mutex<Option<String>>>,
 ) -> std::io::Result<()> {
     let request: Request = match zenbookd_ipc::receive_message(&mut stream) {
         Ok(req) => req,
@@ -103,11 +106,15 @@ fn handle_client(
         Request::GetStatus => {
             let cfg = config.read().unwrap().clone();
 
-            let boost_until = state
-                .lock()
-                .unwrap()
-                .boost_until
-                .map(|until| until.timestamp());
+            let (boost_until, last_full_charge, calibration_active) = {
+                let state = state.lock().unwrap();
+
+                (
+                    state.boost_until.map(|until| until.timestamp()),
+                    state.last_full_charge.map(|last| last.timestamp()),
+                    crate::policy::needs_full_charge(&cfg, &state, chrono::Utc::now()),
+                )
+            };
 
             Response::Status(ServiceStatus {
                 charge_limit: cfg.charge_limit,
@@ -118,7 +125,13 @@ fn handle_client(
                 battery_health: battery.health().ok(),
                 battery_charge: battery.capacity().ok(),
 
+                applied_threshold: battery.threshold().ok(),
+
                 boost_until,
+                last_full_charge,
+                calibration_active,
+
+                threshold_error: threshold_error.lock().unwrap().clone(),
             })
         }
 

@@ -51,14 +51,22 @@ fn main() {
     let state = Arc::new(Mutex::new(load_initial_state()));
 
     let wake = Arc::new(Wake::new());
+    let threshold_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     let battery_clone = Arc::clone(&battery);
     let config_clone = Arc::clone(&config);
     let state_clone = Arc::clone(&state);
     let wake_clone = Arc::clone(&wake);
+    let threshold_error_clone = Arc::clone(&threshold_error);
 
     thread::spawn(move || {
-        monitor_battery(battery_clone, config_clone, state_clone, wake_clone);
+        monitor_battery(
+            battery_clone,
+            config_clone,
+            state_clone,
+            wake_clone,
+            threshold_error_clone,
+        );
     });
 
     let config_clone = Arc::clone(&config);
@@ -69,7 +77,7 @@ fn main() {
         monitor_power(config_clone, state_clone, wake_clone);
     });
 
-    if let Err(err) = ipc::run_server(config, battery, state, wake) {
+    if let Err(err) = ipc::run_server(config, battery, state, wake, threshold_error) {
         log::error!("Failed to start IPC server: {err}");
         std::process::exit(1);
     }
@@ -101,6 +109,7 @@ fn monitor_battery(
     config: Arc<RwLock<Config>>,
     state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
+    threshold_error: Arc<Mutex<Option<String>>>,
 ) {
     log::info!("Started battery monitoring thread");
 
@@ -142,7 +151,11 @@ fn monitor_battery(
 
             if let Err(err) = battery.set_threshold(target_threshold) {
                 log::error!("Failed to set charge threshold: {err}");
+
+                *threshold_error.lock().unwrap() = Some(err.to_string());
             }
+        } else {
+            *threshold_error.lock().unwrap() = None;
         }
 
         wake.wait_timeout(&mut last_seen, Duration::from_secs(30));
