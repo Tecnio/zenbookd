@@ -20,7 +20,31 @@ zenbookd set-periodic-charge on       # enable/disable periodic full charge
 zenbookd set-charge-period 30         # days between periodic full charges
 zenbookd set-wifi-power-save on       # disable Wi-Fi power saving while on AC
 zenbookd reload                       # re-read config.toml without restarting
+zenbookd --version                    # print the version
 ```
+
+`status` prints a panel:
+
+```
+╭─ zenbookd ──────────────────────────────╮
+│                                         │
+│   Charge  ██████████████░░░░░░   72%    │
+│   Health  ███████████████████░   94%    │
+│                                         │
+├─────────────────────────────────────────┤
+│                                         │
+│   Charge limit          80%             │
+│   Applied threshold     100%  boost     │
+│   Periodic full charge  every 30 days   │
+│   Last full charge      12 days ago     │
+│   Boost                 23h 9m left     │
+│                                         │
+╰─────────────────────────────────────────╯
+```
+
+Colour follows `NO_COLOR` and is dropped when the output is not a terminal. The box
+falls back to ASCII when the locale is not UTF-8, and to a plain list when the
+terminal is too narrow to hold it.
 
 ## Config
 

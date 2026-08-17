@@ -1,13 +1,56 @@
-use std::os::unix::net::UnixStream;
+mod status;
+mod ui;
 
-use clap::{Parser, Subcommand};
-use colored::*;
+use std::{io::ErrorKind, os::unix::net::UnixStream, process::ExitCode};
 
+use clap::{
+    Parser, Subcommand,
+    builder::styling::{AnsiColor, Effects, Style, Styles},
+};
+use thiserror::Error;
 use zenbookd_ipc::{Request, Response, socket_path};
+
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Green.on_default())
+    .placeholder(AnsiColor::White.on_default().effects(Effects::DIMMED))
+    .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::Green.on_default())
+    .invalid(AnsiColor::Yellow.on_default());
+
+const HEADER: Style = AnsiColor::Cyan.on_default().effects(Effects::BOLD);
+const LITERAL: Style = AnsiColor::Green.on_default();
+
+fn examples() -> String {
+    let commands = [
+        ("status", "show charge, health and configuration"),
+        ("set-limit 80", "hold the battery at 80%"),
+        ("boost", "charge to 100% now, restore the limit after"),
+        ("set-charge-period 30", "days between periodic full charges"),
+        ("reload", "re-read config.toml without restarting"),
+    ];
+
+    let mut out = format!("{HEADER}Examples:{HEADER:#}");
+
+    for (command, note) in commands {
+        let padding = " ".repeat(24usize.saturating_sub(command.len()));
+
+        out.push_str(&format!(
+            "\n  {LITERAL}zenbookd {command}{LITERAL:#}{padding}{note}"
+        ));
+    }
+
+    out
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "zenbookd")]
-#[command(about = "Zenbook Battery Daemon CLI", long_about = None)]
+#[command(version)]
+#[command(about = "Zenbook battery daemon CLI", long_about = None)]
+#[command(styles = STYLES)]
+#[command(after_help = examples())]
+#[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -60,16 +103,92 @@ enum Toggle {
     Off,
 }
 
-fn send_request(request: Request) -> Result<Response, Box<dyn std::error::Error>> {
-    let mut stream = UnixStream::connect(socket_path())?;
+#[derive(Debug, Error)]
+enum CliError {
+    #[error("{source}")]
+    Connect {
+        path: String,
+        source: std::io::Error,
+    },
 
-    zenbookd_ipc::send_message(&mut stream, &request)?;
-    let response: Response = zenbookd_ipc::receive_message(&mut stream)?;
-
-    Ok(response)
+    #[error("{0}")]
+    Ipc(#[from] zenbookd_ipc::IpcError),
 }
 
-fn main() {
+fn send_request(request: Request) -> Result<Response, CliError> {
+    let path = socket_path();
+
+    let mut stream = UnixStream::connect(&path).map_err(|source| CliError::Connect {
+        path: path.clone(),
+        source,
+    })?;
+
+    zenbookd_ipc::send_message(&mut stream, &request)?;
+
+    Ok(zenbookd_ipc::receive_message(&mut stream)?)
+}
+
+fn confirmation(command: &Commands) -> String {
+    match command {
+        Commands::SetLimit { limit } => format!("Charge limit set to {limit}%"),
+
+        Commands::Boost { stop: false } => {
+            "Boost enabled, charging to 100% until full or for 24h".to_string()
+        }
+
+        Commands::Boost { stop: true } => "Boost cancelled, charge limit restored".to_string(),
+
+        Commands::SetPeriodicCharge { state: Toggle::On } => {
+            "Periodic full charge enabled".to_string()
+        }
+
+        Commands::SetPeriodicCharge { state: Toggle::Off } => {
+            "Periodic full charge disabled".to_string()
+        }
+
+        Commands::SetChargePeriod { days } => format!("Charge period set to {days} days"),
+
+        Commands::SetWifiPowerSave { state: Toggle::On } => {
+            "Wi-Fi power saving disabled on AC".to_string()
+        }
+
+        Commands::SetWifiPowerSave { state: Toggle::Off } => {
+            "Wi-Fi power saving left untouched on AC".to_string()
+        }
+
+        Commands::Reload => "Configuration reloaded".to_string(),
+
+        Commands::Status => unreachable!("status never returns Response::Ok"),
+    }
+}
+
+fn report_connect_failure(path: &str, source: &std::io::Error) {
+    let hint = match source.kind() {
+        ErrorKind::NotFound => {
+            "The service does not appear to be running. Try: systemctl status zenbookd.service"
+                .to_string()
+        }
+
+        ErrorKind::PermissionDenied => {
+            format!("Your user may not have access to the socket at {path}")
+        }
+
+        ErrorKind::ConnectionRefused => {
+            "The socket exists but nothing is listening. Try: systemctl restart zenbookd.service"
+                .to_string()
+        }
+
+        _ => "Try: systemctl status zenbookd.service".to_string(),
+    };
+
+    ui::failure(
+        "Cannot reach the zenbookd service",
+        &source.to_string(),
+        Some(&hint),
+    );
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let request = match &cli.command {
@@ -86,220 +205,37 @@ fn main() {
 
     match send_request(request) {
         Ok(Response::Status(status)) => {
-            println!("{}", "── Battery Status ──".bold().cyan());
+            status::report(&status);
 
-            if let Some(charge) = status.battery_charge {
-                let charge_color = if charge <= 20 {
-                    charge.to_string().red()
-                } else if charge <= 50 {
-                    charge.to_string().yellow()
-                } else {
-                    charge.to_string().green()
-                };
-
-                println!("  {:<22} {}%", "Current Charge:".bold(), charge_color);
-            }
-
-            if let Some(health) = status.battery_health {
-                let health_color = if health < 80 {
-                    health.to_string().red()
-                } else {
-                    health.to_string().green()
-                };
-
-                println!("  {:<22} {}%", "Battery Health:".bold(), health_color);
-            }
-
-            println!();
-
-            println!("{}", "── Service Configuration ──".bold().cyan());
-
-            println!(
-                "  {:<22} {}%",
-                "Charge Limit:".bold(),
-                status.charge_limit.to_string().green()
-            );
-
-            if let Some(applied) = status.applied_threshold {
-                let suffix = if status.boost_until.is_some() {
-                    " (boost)"
-                } else if status.calibration_active {
-                    " (periodic calibration)"
-                } else {
-                    ""
-                };
-
-                let applied_color = if applied == status.charge_limit {
-                    applied.to_string().green()
-                } else {
-                    applied.to_string().yellow()
-                };
-
-                println!(
-                    "  {:<22} {}%{}",
-                    "Applied Threshold:".bold(),
-                    applied_color,
-                    suffix
-                );
-            }
-
-            let periodic_info = if status.enable_periodic_full_charge {
-                format!(
-                    "Every {} days",
-                    status.full_charge_period.to_string().cyan()
-                )
-            } else {
-                "Disabled".yellow().to_string()
-            };
-
-            println!("  {:<22} {}", "Periodic Full Charge:".bold(), periodic_info);
-
-            let last_full_charge_info = match status.last_full_charge {
-                None => "Never".yellow().to_string(),
-
-                Some(ts) => {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-
-                    let age_days = (now - ts) / 86_400;
-
-                    if age_days < 1 {
-                        "Today".to_string()
-                    } else if age_days < 2 {
-                        "Yesterday".to_string()
-                    } else {
-                        format!("{} days ago", age_days.to_string().cyan())
-                    }
-                }
-            };
-
-            println!(
-                "  {:<22} {}",
-                "Last Full Charge:".bold(),
-                last_full_charge_info
-            );
-
-            let boost_info = match status.boost_until {
-                Some(until) => {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-
-                    let remaining = until - now;
-
-                    if remaining > 0 {
-                        let hours = remaining / 3600;
-                        let minutes = (remaining % 3600) / 60;
-
-                        format!(
-                            "Active ({}h {}m left or until full)",
-                            hours.to_string().cyan(),
-                            minutes.to_string().cyan()
-                        )
-                    } else {
-                        "Active".cyan().to_string()
-                    }
-                }
-
-                None => "Inactive".yellow().to_string(),
-            };
-
-            println!("  {:<22} {}", "Boost:".bold(), boost_info);
-
-            if let Some(err) = &status.threshold_error {
-                println!();
-
-                eprintln!(
-                    "{} {}",
-                    "⚠ Failed to apply the charge threshold:".red().bold(),
-                    err
-                );
-
-                eprintln!(
-                    "{}",
-                    "The daemon may lack write access to the battery sysfs attribute; \
-                     check that the udev rule from scripts/ is installed."
-                        .yellow()
-                );
-            }
+            ExitCode::SUCCESS
         }
 
-        Ok(Response::Ok) => match &cli.command {
-            Commands::SetLimit { limit } => {
-                println!(
-                    "{} Charge limit set to {}%.",
-                    "✔".green().bold(),
-                    limit.to_string().green().bold()
-                );
-            }
+        Ok(Response::Ok) => {
+            ui::success(&confirmation(&cli.command));
 
-            Commands::Boost { stop: false } => {
-                println!(
-                    "{}",
-                    "✔ Boost enabled — charging to 100% for 24h or until full, then restoring the limit."
-                        .green()
-                        .bold()
-                );
-            }
-
-            Commands::Boost { stop: true } => {
-                println!(
-                    "{}",
-                    "✔ Boost cancelled — charge limit restored.".green().bold()
-                );
-            }
-
-            Commands::SetPeriodicCharge { state } => {
-                let message = if *state == Toggle::On {
-                    "✔ Periodic full charge enabled."
-                } else {
-                    "✔ Periodic full charge disabled."
-                };
-
-                println!("{}", message.green().bold());
-            }
-
-            Commands::SetChargePeriod { days } => {
-                println!(
-                    "{} Charge period set to {} days.",
-                    "✔".green().bold(),
-                    days.to_string().green().bold()
-                );
-            }
-
-            Commands::SetWifiPowerSave { state } => {
-                let message = if *state == Toggle::On {
-                    "✔ Wi-Fi power saving will be disabled on AC."
-                } else {
-                    "✔ Wi-Fi power saving left untouched on AC."
-                };
-
-                println!("{}", message.green().bold());
-            }
-
-            Commands::Reload => {
-                println!("{}", "✔ Configuration reloaded.".green().bold());
-            }
-
-            Commands::Status => {
-                unreachable!("Status never returns Response::Ok");
-            }
-        },
+            ExitCode::SUCCESS
+        }
 
         Ok(Response::Error(err)) => {
-            eprintln!("{} {}", "✘ Error from service:".red().bold(), err);
+            ui::failure("Service rejected the request", &err, None);
 
-            std::process::exit(1);
+            ExitCode::FAILURE
         }
 
-        Err(err) => {
-            eprintln!("{} {}", "✘ Failed to connect to service:".red().bold(), err);
-            eprintln!("{}", "Make sure the service is running.".yellow());
+        Err(CliError::Connect { path, source }) => {
+            report_connect_failure(&path, &source);
 
-            std::process::exit(1);
+            ExitCode::FAILURE
+        }
+
+        Err(CliError::Ipc(err)) => {
+            ui::failure(
+                "Lost contact with the zenbookd service",
+                &err.to_string(),
+                Some("Try: systemctl status zenbookd.service"),
+            );
+
+            ExitCode::FAILURE
         }
     }
 }
