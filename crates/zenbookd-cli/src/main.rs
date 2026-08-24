@@ -1,7 +1,7 @@
 mod status;
 mod ui;
 
-use std::{io::ErrorKind, os::unix::net::UnixStream, process::ExitCode};
+use std::{io::ErrorKind, os::unix::net::UnixStream, process::ExitCode, time::Duration};
 
 use clap::{
     Parser, Subcommand,
@@ -18,6 +18,8 @@ const STYLES: Styles = Styles::styled()
     .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
     .valid(AnsiColor::Green.on_default())
     .invalid(AnsiColor::Yellow.on_default());
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 const HEADER: Style = AnsiColor::Cyan.on_default().effects(Effects::BOLD);
 const LITERAL: Style = AnsiColor::Green.on_default();
@@ -123,6 +125,14 @@ fn send_request(request: Request) -> Result<Response, CliError> {
         source,
     })?;
 
+    stream
+        .set_read_timeout(Some(REQUEST_TIMEOUT))
+        .map_err(zenbookd_ipc::IpcError::Io)?;
+
+    stream
+        .set_write_timeout(Some(REQUEST_TIMEOUT))
+        .map_err(zenbookd_ipc::IpcError::Io)?;
+
     zenbookd_ipc::send_message(&mut stream, &request)?;
 
     Ok(zenbookd_ipc::receive_message(&mut stream)?)
@@ -169,9 +179,10 @@ fn report_connect_failure(path: &str, source: &std::io::Error) {
                 .to_string()
         }
 
-        ErrorKind::PermissionDenied => {
-            format!("Your user may not have access to the socket at {path}")
-        }
+        ErrorKind::PermissionDenied => format!(
+            "The socket at {path} is group-owned by zenbookd. \
+             Try: sudo usermod -aG zenbookd $USER, then log back in"
+        ),
 
         ErrorKind::ConnectionRefused => {
             "The socket exists but nothing is listening. Try: systemctl restart zenbookd.service"

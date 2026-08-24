@@ -6,6 +6,7 @@ use std::{
     },
     path::Path,
     sync::{Arc, Mutex, RwLock},
+    thread,
     time::Duration,
 };
 
@@ -22,12 +23,15 @@ use crate::{
 const BOOST_DURATION_HOURS: i64 = 24;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 
+type Reported = Arc<Mutex<Option<String>>>;
+
 pub fn run_server(
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
     state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
-    threshold_error: Arc<Mutex<Option<String>>>,
+    threshold_error: Reported,
+    config_error: Reported,
 ) -> std::io::Result<()> {
     let socket_path = socket_path();
     let path = Path::new(&socket_path);
@@ -39,7 +43,7 @@ pub fn run_server(
     let listener = UnixListener::bind(path)?;
 
     let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o666);
+    perms.set_mode(0o660);
     fs::set_permissions(path, perms)?;
 
     log::info!("IPC server listening on {socket_path}");
@@ -57,16 +61,26 @@ pub fn run_server(
                     continue;
                 }
 
-                if let Err(err) = handle_client(
-                    stream,
-                    Arc::clone(&config),
-                    Arc::clone(&battery),
-                    Arc::clone(&state),
-                    Arc::clone(&wake),
-                    Arc::clone(&threshold_error),
-                ) {
-                    log::error!("Error handling IPC client: {err}");
-                }
+                let config = Arc::clone(&config);
+                let battery = Arc::clone(&battery);
+                let state = Arc::clone(&state);
+                let wake = Arc::clone(&wake);
+                let threshold_error = Arc::clone(&threshold_error);
+                let config_error = Arc::clone(&config_error);
+
+                thread::spawn(move || {
+                    if let Err(err) = handle_client(
+                        stream,
+                        config,
+                        battery,
+                        state,
+                        wake,
+                        threshold_error,
+                        config_error,
+                    ) {
+                        log::error!("Error handling IPC client: {err}");
+                    }
+                });
             }
 
             Err(err) => {
@@ -78,13 +92,40 @@ pub fn run_server(
     Ok(())
 }
 
+fn update_config(
+    config: &RwLock<Config>,
+    config_error: &Mutex<Option<String>>,
+    apply: impl FnOnce(&mut Config),
+) -> Response {
+    let mut config = config.write().unwrap();
+
+    let mut candidate = config.clone();
+    apply(&mut candidate);
+
+    match save_config(&candidate) {
+        Ok(()) => {
+            *config = candidate;
+            *config_error.lock().unwrap() = None;
+
+            Response::Ok
+        }
+
+        Err(err) => {
+            log::error!("Failed to save config: {err}");
+
+            Response::Error(format!("Failed to save config: {err}"))
+        }
+    }
+}
+
 fn handle_client(
     mut stream: UnixStream,
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
     state: Arc<Mutex<State>>,
     wake: Arc<Wake>,
-    threshold_error: Arc<Mutex<Option<String>>>,
+    threshold_error: Reported,
+    config_error: Reported,
 ) -> std::io::Result<()> {
     let request: Request = match zenbookd_ipc::receive_message(&mut stream) {
         Ok(req) => req,
@@ -134,105 +175,56 @@ fn handle_client(
                 calibration_active,
 
                 threshold_error: threshold_error.lock().unwrap().clone(),
+                config_error: config_error.lock().unwrap().clone(),
             })
         }
 
         Request::SetChargeLimit(limit) => {
-            log::info!("Requested charge limit: {}", limit);
+            log::info!("Requested charge limit: {limit}");
 
-            if let Err(err) = validate_charge_limit(limit) {
-                log::warn!("Rejected charge limit: {err}");
-
-                Response::Error(err)
-            } else {
-                let mut config = config.write().unwrap();
-                config.charge_limit = limit;
-
-                let result = save_config(&config);
-                drop(config);
-
-                match result {
-                    Ok(_) => Response::Ok,
-
-                    Err(err) => {
-                        log::error!("Failed to save config: {err}");
-
-                        Response::Error(format!("Failed to save config: {err}"))
-                    }
-                }
-            }
-        }
-
-        Request::SetPeriodicFullCharge(enable) => {
-            let mut config = config.write().unwrap();
-            config.enable_periodic_full_charge = enable;
-
-            let result = save_config(&config);
-            drop(config);
-
-            match result {
-                Ok(_) => Response::Ok,
-
+            match validate_charge_limit(limit) {
                 Err(err) => {
-                    log::error!("Failed to save config: {err}");
+                    log::warn!("Rejected charge limit: {err}");
 
-                    Response::Error(format!("Failed to save config: {err}"))
+                    Response::Error(err)
                 }
+
+                Ok(()) => update_config(&config, &config_error, |cfg| cfg.charge_limit = limit),
             }
         }
 
-        Request::SetFullChargePeriod(days) => {
-            if let Err(err) = validate_full_charge_period(days) {
+        Request::SetPeriodicFullCharge(enable) => update_config(&config, &config_error, |cfg| {
+            cfg.enable_periodic_full_charge = enable
+        }),
+
+        Request::SetFullChargePeriod(days) => match validate_full_charge_period(days) {
+            Err(err) => {
                 log::warn!("Rejected full charge period: {err}");
 
                 Response::Error(err)
-            } else {
-                let mut config = config.write().unwrap();
-                config.full_charge_period = days;
-
-                let result = save_config(&config);
-                drop(config);
-
-                match result {
-                    Ok(_) => Response::Ok,
-
-                    Err(err) => {
-                        log::error!("Failed to save config: {err}");
-
-                        Response::Error(format!("Failed to save config: {err}"))
-                    }
-                }
             }
-        }
 
-        Request::SetWifiPowerSave(disable_on_ac) => {
-            let mut config = config.write().unwrap();
-            config.disable_wifi_power_save_on_ac = disable_on_ac;
+            Ok(()) => update_config(&config, &config_error, |cfg| cfg.full_charge_period = days),
+        },
 
-            let result = save_config(&config);
-            drop(config);
-
-            match result {
-                Ok(_) => Response::Ok,
-
-                Err(err) => {
-                    log::error!("Failed to save config: {err}");
-
-                    Response::Error(format!("Failed to save config: {err}"))
-                }
-            }
-        }
+        Request::SetWifiPowerSave(disable_on_ac) => update_config(&config, &config_error, |cfg| {
+            cfg.disable_wifi_power_save_on_ac = disable_on_ac
+        }),
 
         Request::ReloadConfig => match crate::config::load_config() {
             Ok(new) => {
                 log::info!("Reloaded configuration from disk");
+
                 *config.write().unwrap() = new;
+                *config_error.lock().unwrap() = None;
 
                 Response::Ok
             }
 
             Err(err) => {
                 log::error!("Failed to reload config: {err}");
+
+                *config_error.lock().unwrap() = Some(err.to_string());
 
                 Response::Error(format!("Failed to reload config: {err}"))
             }

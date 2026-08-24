@@ -39,6 +39,9 @@ enable_periodic_full_charge = true
 
 # The period in days for the full charge.
 full_charge_period = 30
+
+# When enabled, Wi-Fi power saving is disabled while on AC power.
+disable_wifi_power_save_on_ac = true
 EOF
     echo "Created default configuration at /etc/zenbookd/config.toml"
 else
@@ -55,6 +58,18 @@ fi
 
 sudo chown -R zenbookd:zenbookd /etc/zenbookd /var/lib/zenbookd
 
+TARGET_USER="${SUDO_USER:-$USER}"
+
+if [ "$TARGET_USER" != "root" ]; then
+    if id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx zenbookd; then
+        echo "User $TARGET_USER is already in the zenbookd group"
+    else
+        sudo usermod -aG zenbookd "$TARGET_USER"
+        echo "Added $TARGET_USER to the zenbookd group"
+        NEEDS_RELOGIN=1
+    fi
+fi
+
 echo "Installing udev rule for charge threshold access..."
 sudo cp scripts/99-zenbookd-battery.rules /etc/udev/rules.d/
 sudo udevadm control --reload
@@ -69,3 +84,9 @@ sudo systemctl enable --now zenbookd.service
 echo "zenbookd has been installed and started (running as user zenbookd)."
 echo "You can check the service status with: systemctl status zenbookd.service"
 echo "You can use the CLI tool with: zenbookd status"
+
+if [ -n "${NEEDS_RELOGIN:-}" ]; then
+    echo
+    echo "The CLI talks to the daemon over a socket owned by the zenbookd group."
+    echo "Log back in (or run 'newgrp zenbookd') before using it in this shell."
+fi

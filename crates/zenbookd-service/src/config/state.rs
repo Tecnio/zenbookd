@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ConfigLoadError, ConfigSaveError};
+use crate::config::{ConfigLoadError, ConfigSaveError, atomic};
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
@@ -30,15 +30,9 @@ pub fn load_state() -> Result<State, ConfigLoadError> {
 }
 
 pub fn save_state(state: &State) -> Result<(), ConfigSaveError> {
-    let path = state_path();
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
     let data = toml::to_string_pretty(&state)?;
 
-    std::fs::write(path, &data).map_err(Into::into)
+    atomic::write(&state_path(), &data).map_err(Into::into)
 }
 
 pub fn persist_state(state: &State) {

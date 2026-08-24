@@ -11,6 +11,9 @@ pub enum BatteryError {
 
 #[derive(Debug, Error)]
 pub enum BatteryReadError {
+    #[error("Battery reports a zero design capacity")]
+    ZeroDesignCapacity,
+
     #[error("Number parse error: {0}")]
     ParseError(#[from] std::num::ParseIntError),
 

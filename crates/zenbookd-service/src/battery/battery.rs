@@ -38,6 +38,8 @@ impl Battery {
 
         paths.sort();
 
+        let mut without_threshold = None;
+
         for path in paths {
             if !path.is_dir() {
                 continue;
@@ -60,10 +62,14 @@ impl Battery {
                 threshold: path.join(THRESHOLD_KEY),
             };
 
-            return Ok(battery);
+            if battery.threshold.exists() {
+                return Ok(battery);
+            }
+
+            without_threshold.get_or_insert(battery);
         }
 
-        Err(BatteryError::NotFound)
+        without_threshold.ok_or(BatteryError::NotFound)
     }
 
     pub fn health(&self) -> Result<u32, BatteryReadError> {
@@ -79,12 +85,15 @@ impl Battery {
             str.trim().parse::<u32>()?
         };
 
+        if capacity_design == 0 {
+            return Err(BatteryReadError::ZeroDesignCapacity);
+        }
+
         let ratio = capacity_physical as f32 / capacity_design as f32;
 
         let percentage = (ratio * 100.0).round() as u32;
-        let percentage = percentage.clamp(0, 100);
 
-        Ok(percentage)
+        Ok(percentage.min(100))
     }
 
     pub fn capacity(&self) -> Result<u32, BatteryReadError> {
@@ -145,6 +154,54 @@ mod tests {
         let battery = Battery::find_in(tmp.path()).unwrap();
 
         assert_eq!(battery.capacity().unwrap(), 72);
+    }
+
+    #[test]
+    fn prefers_the_battery_exposing_the_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        supply(tmp.path(), "BAT0", &[("capacity", "10\n")]);
+        supply(
+            tmp.path(),
+            "BAT1",
+            &[
+                ("capacity", "72\n"),
+                ("charge_control_end_threshold", "80\n"),
+            ],
+        );
+
+        let battery = Battery::find_in(tmp.path()).unwrap();
+
+        assert_eq!(battery.capacity().unwrap(), 72);
+    }
+
+    #[test]
+    fn falls_back_to_a_battery_without_the_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        supply(tmp.path(), "BAT0", &[("capacity", "72\n")]);
+
+        let battery = Battery::find_in(tmp.path()).unwrap();
+
+        assert_eq!(battery.capacity().unwrap(), 72);
+    }
+
+    #[test]
+    fn a_zero_design_capacity_is_an_error_rather_than_full_health() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        supply(
+            tmp.path(),
+            "BAT0",
+            &[("energy_full", "45000000\n"), ("energy_full_design", "0\n")],
+        );
+
+        let battery = Battery::find_in(tmp.path()).unwrap();
+
+        assert!(matches!(
+            battery.health(),
+            Err(BatteryReadError::ZeroDesignCapacity)
+        ));
     }
 
     #[test]

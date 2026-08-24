@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ConfigLoadError, ConfigSaveError};
+use crate::config::{ConfigLoadError, ConfigSaveError, atomic};
 
 pub const MIN_CHARGE_LIMIT: u32 = 1;
 pub const MAX_CHARGE_LIMIT: u32 = 100;
@@ -139,11 +139,7 @@ pub fn save_config_to(path: &Path, cfg: &Config) -> Result<(), ConfigSaveError> 
     doc["full_charge_period"] = value(cfg.full_charge_period as i64);
     doc["disable_wifi_power_save_on_ac"] = value(cfg.disable_wifi_power_save_on_ac);
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(path, doc.to_string()).map_err(Into::into)
+    atomic::write(path, &doc.to_string()).map_err(Into::into)
 }
 
 fn config_path() -> PathBuf {
@@ -157,7 +153,7 @@ fn config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, os::unix::fs::PermissionsExt};
 
     use super::*;
 
@@ -356,6 +352,41 @@ some_future_key = \"keep me\"
         let loaded = load_config_from(&path).unwrap();
 
         assert_eq!(loaded, cfg);
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_previous_file_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        save_config_to(
+            &path,
+            &Config {
+                charge_limit: 70,
+                ..Config::default()
+            },
+        )
+        .unwrap();
+
+        let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+        perms.set_mode(0o500);
+        fs::set_permissions(tmp.path(), perms).unwrap();
+
+        let result = save_config_to(
+            &path,
+            &Config {
+                charge_limit: 90,
+                ..Config::default()
+            },
+        );
+
+        let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(tmp.path(), perms).unwrap();
+
+        if result.is_err() {
+            assert_eq!(load_config_from(&path).unwrap().charge_limit, 70);
+        }
     }
 
     #[test]

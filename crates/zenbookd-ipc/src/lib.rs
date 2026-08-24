@@ -51,6 +51,9 @@ pub struct ServiceStatus {
 
     #[serde(default)]
     pub threshold_error: Option<String>,
+
+    #[serde(default)]
+    pub config_error: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -142,6 +145,7 @@ mod tests {
             last_full_charge: Some(1_767_000_000),
             calibration_active: true,
             threshold_error: Some("permission denied".to_string()),
+            config_error: None,
         };
 
         let mut buf = Vec::new();
@@ -162,6 +166,7 @@ mod tests {
             Response::Status(s) => {
                 assert_eq!(s.applied_threshold, None);
                 assert!(!s.calibration_active);
+                assert_eq!(s.config_error, None);
             }
 
             _ => panic!("expected Response::Status"),

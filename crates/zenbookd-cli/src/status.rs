@@ -107,7 +107,7 @@ fn boost(status: &ServiceStatus) -> Line {
     let remaining = until - now();
 
     if remaining <= 0 {
-        return Line::new().push("active", Tone::Accent);
+        return Line::new().push("ending", Tone::Accent);
     }
 
     Line::new()
@@ -144,6 +144,19 @@ pub fn panel(status: &ServiceStatus) -> Panel {
 
 pub fn report(status: &ServiceStatus) {
     panel(status).print();
+
+    if let Some(error) = &status.config_error {
+        eprintln!();
+
+        ui::notice(
+            "Failed to read the configuration file",
+            error,
+            Some(
+                "The charge limit above is what the daemon is enforcing, and it does not \
+                 match the file on disk. Fix /etc/zenbookd/config.toml, then: zenbookd reload",
+            ),
+        );
+    }
 
     if let Some(error) = &status.threshold_error {
         eprintln!();

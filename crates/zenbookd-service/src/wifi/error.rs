@@ -14,6 +14,9 @@ pub enum WifiReadError {
     #[error("Command failed: {0}")]
     CommandFailed(String),
 
+    #[error("Unexpected iw output: {0}")]
+    UnexpectedOutput(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }

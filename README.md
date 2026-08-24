@@ -9,6 +9,9 @@ Because Linux is a dysfunctional desktop experience I cannot have a charge limit
 ./scripts/install.sh
 ```
 
+The installer adds you to the `zenbookd` group, which is what grants access to the
+daemon's socket. Log back in (or run `newgrp zenbookd`) before the CLI will work.
+
 ## Usage
 
 ```sh

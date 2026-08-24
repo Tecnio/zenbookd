@@ -65,7 +65,8 @@ impl Wifi {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        Ok(stdout.contains("on"))
+        parse_power_save(&stdout)
+            .ok_or_else(|| WifiReadError::UnexpectedOutput(stdout.trim().to_string()))
     }
 
     pub fn set_power_save(&self, on: bool) -> Result<(), WifiSetError> {
@@ -85,9 +86,31 @@ impl Wifi {
     }
 }
 
+fn parse_power_save(stdout: &str) -> Option<bool> {
+    match stdout.split(':').nth(1)?.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_value_after_the_colon() {
+        assert_eq!(parse_power_save("Power save: on\n"), Some(true));
+        assert_eq!(parse_power_save("Power save: off\n"), Some(false));
+    }
+
+    #[test]
+    fn rejects_output_it_does_not_recognise() {
+        assert_eq!(parse_power_save("command not found"), None);
+        assert_eq!(parse_power_save("Power save: maybe"), None);
+        assert_eq!(parse_power_save(""), None);
+    }
 
     #[test]
     fn finds_the_wireless_interface() {
