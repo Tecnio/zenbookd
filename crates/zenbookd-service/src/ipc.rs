@@ -15,7 +15,8 @@ use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
 use crate::{
     battery::Battery,
     config::{
-        Config, State, save_config, save_state, validate_charge_limit, validate_full_charge_period,
+        Config, PersistentState, flush_state, save_config, save_state, validate_charge_limit,
+        validate_full_charge_period,
     },
     wake::Wake,
 };
@@ -28,7 +29,7 @@ type Reported = Arc<Mutex<Option<String>>>;
 pub fn run_server(
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
-    state: Arc<Mutex<State>>,
+    state: Arc<Mutex<PersistentState>>,
     wake: Arc<Wake>,
     threshold_error: Reported,
     config_error: Reported,
@@ -122,7 +123,7 @@ fn handle_client(
     mut stream: UnixStream,
     config: Arc<RwLock<Config>>,
     battery: Arc<Battery>,
-    state: Arc<Mutex<State>>,
+    state: Arc<Mutex<PersistentState>>,
     wake: Arc<Wake>,
     threshold_error: Reported,
     config_error: Reported,
@@ -151,11 +152,12 @@ fn handle_client(
 
             let (boost_until, last_full_charge, calibration_active) = {
                 let state = state.lock().unwrap();
+                let data = state.data();
 
                 (
-                    state.boost_until.map(|until| until.timestamp()),
-                    state.last_full_charge.map(|last| last.timestamp()),
-                    crate::policy::needs_full_charge(&cfg, &state, chrono::Utc::now()),
+                    data.boost_until.map(|until| until.timestamp()),
+                    data.last_full_charge.map(|last| last.timestamp()),
+                    crate::policy::needs_full_charge(&cfg, data, chrono::Utc::now()),
                 )
             };
 
@@ -231,9 +233,7 @@ fn handle_client(
         },
 
         Request::SetBoost(enable) => {
-            let mut state = state.lock().unwrap();
-
-            state.boost_until = if enable {
+            let until = if enable {
                 let until = chrono::Utc::now() + chrono::Duration::hours(BOOST_DURATION_HOURS);
 
                 log::info!("Boost enabled until {until} (or until fully charged)");
@@ -243,8 +243,25 @@ fn handle_client(
                 None
             };
 
-            match save_state(&state) {
-                Ok(_) => Response::Ok,
+            let candidate = {
+                let state = state.lock().unwrap();
+                let mut candidate = state.data().clone();
+                candidate.boost_until = until;
+                candidate
+            };
+
+            match save_state(&candidate) {
+                Ok(()) => {
+                    {
+                        let mut state = state.lock().unwrap();
+                        state.data_mut().boost_until = until;
+                        state.sync_after_write(&candidate);
+                    }
+
+                    flush_state(&state);
+
+                    Response::Ok
+                }
 
                 Err(err) => {
                     log::error!("Failed to save state: {err}");

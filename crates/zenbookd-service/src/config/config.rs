@@ -80,6 +80,22 @@ impl Config {
             self.charge_limit = clamped;
         }
     }
+
+    fn clamp_full_charge_period(&mut self) {
+        let clamped = self
+            .full_charge_period
+            .clamp(MIN_FULL_CHARGE_PERIOD, MAX_FULL_CHARGE_PERIOD);
+
+        if clamped != self.full_charge_period {
+            log::warn!(
+                "Full charge period {} is out of range, using {}",
+                self.full_charge_period,
+                clamped
+            );
+
+            self.full_charge_period = clamped;
+        }
+    }
 }
 
 pub fn validate_charge_limit(limit: u32) -> Result<(), String> {
@@ -118,6 +134,7 @@ pub fn load_config_from(path: &Path) -> Result<Config, ConfigLoadError> {
     let mut config = toml::from_str::<Config>(&data)?;
 
     config.clamp_charge_limit();
+    config.clamp_full_charge_period();
 
     Ok(config)
 }
@@ -233,6 +250,72 @@ full_charge_period = 30
         cfg.clamp_charge_limit();
 
         assert_eq!(cfg.charge_limit, 80);
+    }
+
+    #[test]
+    fn zero_full_charge_period_is_clamped_up() {
+        let mut cfg = Config {
+            full_charge_period: 0,
+            ..Config::default()
+        };
+
+        cfg.clamp_full_charge_period();
+
+        assert_eq!(cfg.full_charge_period, MIN_FULL_CHARGE_PERIOD);
+    }
+
+    #[test]
+    fn full_charge_period_above_the_maximum_is_clamped_down() {
+        let mut cfg = Config {
+            full_charge_period: 5000,
+            ..Config::default()
+        };
+
+        cfg.clamp_full_charge_period();
+
+        assert_eq!(cfg.full_charge_period, MAX_FULL_CHARGE_PERIOD);
+    }
+
+    #[test]
+    fn zero_full_charge_period_is_clamped_on_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        fs::write(
+            &path,
+            "\
+charge_limit = 80
+enable_periodic_full_charge = true
+full_charge_period = 0
+",
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_config_from(&path).unwrap().full_charge_period,
+            MIN_FULL_CHARGE_PERIOD
+        );
+    }
+
+    #[test]
+    fn oversized_full_charge_period_is_clamped_on_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        fs::write(
+            &path,
+            "\
+charge_limit = 80
+enable_periodic_full_charge = true
+full_charge_period = 5000
+",
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_config_from(&path).unwrap().full_charge_period,
+            MAX_FULL_CHARGE_PERIOD
+        );
     }
 
     #[test]

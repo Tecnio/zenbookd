@@ -15,13 +15,14 @@ use std::{
 use crate::{
     adapter::Adapter,
     battery::Battery,
-    config::{Config, State, load_config, load_state, persist_state},
+    config::{Config, PersistentState, State, flush_state, load_config, load_state},
     wake::Wake,
     wifi::Wifi,
 };
 
 const POWER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const WIFI_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
+const IW_FAILURES_BEFORE_REDISCOVER: u8 = 3;
 
 type Reported = Arc<Mutex<Option<String>>>;
 
@@ -35,7 +36,7 @@ fn main() {
 
     let battery = Arc::new(Battery::find().expect("Failed to detect battery"));
     let config = Arc::new(RwLock::new(cfg));
-    let state = Arc::new(Mutex::new(load_initial_state()));
+    let state = Arc::new(Mutex::new(PersistentState::new(load_initial_state())));
 
     let wake = Arc::new(Wake::new());
 
@@ -130,7 +131,7 @@ fn load_initial_state() -> State {
 fn monitor_battery(
     battery: Arc<Battery>,
     config: Arc<RwLock<Config>>,
-    state: Arc<Mutex<State>>,
+    state: Arc<Mutex<PersistentState>>,
     wake: Arc<Wake>,
     threshold_error: Reported,
 ) {
@@ -146,6 +147,7 @@ fn monitor_battery(
 
             Err(err) => {
                 log::error!("Failed to read battery capacity: {err}");
+                flush_state(&state);
                 wake.wait_timeout(&mut last_seen, Duration::from_secs(60));
                 continue;
             }
@@ -154,14 +156,17 @@ fn monitor_battery(
         let target_threshold = {
             let mut state = state.lock().unwrap();
 
-            let decision = policy::decide(&cfg, &mut state, current_capacity, chrono::Utc::now());
+            let decision =
+                policy::decide(&cfg, state.data_mut(), current_capacity, chrono::Utc::now());
 
             if decision.state_dirty {
-                persist_state(&state);
+                state.mark_dirty();
             }
 
             decision.target_threshold
         };
+
+        flush_state(&state);
 
         let applied = match battery.threshold() {
             Ok(threshold) => Some(threshold),
@@ -197,48 +202,65 @@ fn monitor_battery(
             }
         }
 
+        flush_state(&state);
         wake.wait_timeout(&mut last_seen, Duration::from_secs(30));
     }
 }
 
-fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<State>>, wake: Arc<Wake>) {
+fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<PersistentState>>, wake: Arc<Wake>) {
     log::info!("Started power monitoring thread");
 
     let mut last_seen = 0;
 
     let mut devices = None;
     let mut reported = false;
+    let mut iw_failures = 0;
 
     let mut last_online = None;
     let mut last_checked: Option<Instant> = None;
 
     loop {
         let enabled = config.read().unwrap().disable_wifi_power_save_on_ac;
-        let pending = state.lock().unwrap().wifi_power_save_restore.is_some();
+        let pending = state
+            .lock()
+            .unwrap()
+            .data()
+            .wifi_power_save_restore
+            .is_some();
 
         if devices.is_none() && (enabled || pending) {
             devices = find_devices(&mut reported);
         }
 
-        let Some((adapter, wifi)) = &devices else {
+        let Some((adapter, wifi)) = devices.clone() else {
+            flush_state(&state);
             wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
             continue;
         };
 
         if !enabled {
             if pending {
-                let mut state = state.lock().unwrap();
+                let original = state.lock().unwrap().data().wifi_power_save_restore;
 
-                // Only clear the stored value once the interface has actually been
-                // handed back, so a failed restore is retried on the next tick.
-                if let Some(original) = state.wifi_power_save_restore {
+                if let Some(original) = original {
                     log::info!("Wi-Fi power saving feature disabled, restoring original state");
 
-                    if let Err(err) = wifi.set_power_save(original) {
-                        log::error!("Failed to restore Wi-Fi power save: {err}");
-                    } else {
-                        state.wifi_power_save_restore = None;
-                        persist_state(&state);
+                    match wifi.set_power_save(original) {
+                        Ok(()) => {
+                            iw_failures = 0;
+
+                            let mut state = state.lock().unwrap();
+
+                            if state.data().wifi_power_save_restore == Some(original) {
+                                state.data_mut().wifi_power_save_restore = None;
+                                state.mark_dirty();
+                            }
+                        }
+
+                        Err(err) => {
+                            log::error!("Failed to restore Wi-Fi power save: {err}");
+                            note_iw_failure(&mut iw_failures, &mut devices, &mut reported);
+                        }
                     }
                 }
             }
@@ -246,6 +268,7 @@ fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<State>>, wake: Ar
             last_online = None;
             last_checked = None;
 
+            flush_state(&state);
             wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
             continue;
         }
@@ -255,6 +278,7 @@ fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<State>>, wake: Ar
 
             Err(err) => {
                 log::error!("Failed to read AC adapter state: {err}");
+                flush_state(&state);
                 wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
                 continue;
             }
@@ -263,23 +287,29 @@ fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<State>>, wake: Ar
         let stale = last_checked.is_none_or(|at| at.elapsed() >= WIFI_RECHECK_INTERVAL);
 
         if last_online == Some(online) && !stale {
+            flush_state(&state);
             wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
             continue;
         }
 
         let current = match wifi.power_save() {
-            Ok(current) => current,
+            Ok(current) => {
+                iw_failures = 0;
+                current
+            }
 
             Err(err) => {
                 log::error!("Failed to read Wi-Fi power save: {err}");
+                note_iw_failure(&mut iw_failures, &mut devices, &mut reported);
+                flush_state(&state);
                 wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
                 continue;
             }
         };
 
-        let mut state = state.lock().unwrap();
-        let mut state_dirty = false;
+        let restore = state.lock().unwrap().data().wifi_power_save_restore;
         let mut settled = true;
+        let mut new_restore: Option<Option<bool>> = None;
 
         // The interface resets power saving to the driver default on every boot, so what we want is
         // decided against the interface itself. The stored value is only the original to hand back
@@ -291,47 +321,65 @@ fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<State>>, wake: Ar
                 if let Err(err) = wifi.set_power_save(false) {
                     log::error!("Failed to disable Wi-Fi power save: {err}");
                     settled = false;
-                } else if state.wifi_power_save_restore.is_none() {
-                    state.wifi_power_save_restore = Some(current);
-                    state_dirty = true;
+                    note_iw_failure(&mut iw_failures, &mut devices, &mut reported);
+                } else {
+                    iw_failures = 0;
+
+                    if restore.is_none() {
+                        new_restore = Some(Some(current));
+                    }
                 }
             }
-        } else if let Some(original) = state.wifi_power_save_restore {
+        } else if let Some(original) = restore {
             let restored = if current == original {
                 true
             } else {
                 log::info!("On battery power, restoring Wi-Fi power save");
 
                 match wifi.set_power_save(original) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        iw_failures = 0;
+                        true
+                    }
 
                     Err(err) => {
                         log::error!("Failed to restore Wi-Fi power save: {err}");
+                        note_iw_failure(&mut iw_failures, &mut devices, &mut reported);
                         false
                     }
                 }
             };
 
             if restored {
-                state.wifi_power_save_restore = None;
-                state_dirty = true;
+                new_restore = Some(None);
             } else {
                 settled = false;
             }
         }
 
-        if state_dirty {
-            persist_state(&state);
+        if let Some(wifi_power_save_restore) = new_restore {
+            let mut state = state.lock().unwrap();
+            state.data_mut().wifi_power_save_restore = wifi_power_save_restore;
+            state.mark_dirty();
         }
-
-        drop(state);
 
         if settled {
             last_online = Some(online);
             last_checked = Some(Instant::now());
         }
 
+        flush_state(&state);
         wake.wait_timeout(&mut last_seen, POWER_POLL_INTERVAL);
+    }
+}
+
+fn note_iw_failure(failures: &mut u8, devices: &mut Option<(Adapter, Wifi)>, reported: &mut bool) {
+    *failures = failures.saturating_add(1);
+
+    if *failures >= IW_FAILURES_BEFORE_REDISCOVER {
+        *devices = None;
+        *reported = false;
+        *failures = 0;
     }
 }
 

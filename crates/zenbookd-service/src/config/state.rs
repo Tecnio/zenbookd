@@ -1,9 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{ConfigLoadError, ConfigSaveError, atomic};
+
+const FLUSH_ATTEMPTS: u32 = 8;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
@@ -14,6 +16,34 @@ pub struct State {
 
     #[serde(default)]
     pub wifi_power_save_restore: Option<bool>,
+}
+
+#[derive(Debug)]
+pub struct PersistentState {
+    data: State,
+    dirty: bool,
+}
+
+impl PersistentState {
+    pub fn new(data: State) -> Self {
+        Self { data, dirty: false }
+    }
+
+    pub fn data(&self) -> &State {
+        &self.data
+    }
+
+    pub fn data_mut(&mut self) -> &mut State {
+        &mut self.data
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn sync_after_write(&mut self, written: &State) {
+        self.dirty = self.data != *written;
+    }
 }
 
 pub fn load_state() -> Result<State, ConfigLoadError> {
@@ -35,9 +65,34 @@ pub fn save_state(state: &State) -> Result<(), ConfigSaveError> {
     atomic::write(&state_path(), &data).map_err(Into::into)
 }
 
-pub fn persist_state(state: &State) {
-    if let Err(err) = save_state(state) {
-        log::error!("Failed to save state: {err}");
+pub fn flush_state(state: &Mutex<PersistentState>) {
+    for _ in 0..FLUSH_ATTEMPTS {
+        let snapshot = {
+            let guard = state.lock().unwrap();
+
+            if !guard.dirty {
+                return;
+            }
+
+            guard.data.clone()
+        };
+
+        match save_state(&snapshot) {
+            Ok(()) => {
+                let mut guard = state.lock().unwrap();
+
+                guard.sync_after_write(&snapshot);
+
+                if !guard.dirty {
+                    return;
+                }
+            }
+
+            Err(err) => {
+                log::error!("Failed to save state: {err}");
+                return;
+            }
+        }
     }
 }
 
@@ -86,5 +141,27 @@ mod tests {
         let text = toml::to_string_pretty(&state).unwrap();
 
         assert_eq!(toml::from_str::<State>(&text).unwrap(), state);
+    }
+
+    #[test]
+    fn sync_after_write_clears_dirty_when_unchanged() {
+        let mut state = PersistentState::new(State::default());
+        state.mark_dirty();
+
+        let snapshot = state.data().clone();
+        state.sync_after_write(&snapshot);
+
+        assert!(!state.dirty);
+    }
+
+    #[test]
+    fn sync_after_write_keeps_dirty_when_diverged() {
+        let mut state = PersistentState::new(State::default());
+        let snapshot = state.data().clone();
+
+        state.data_mut().wifi_power_save_restore = Some(true);
+        state.sync_after_write(&snapshot);
+
+        assert!(state.dirty);
     }
 }

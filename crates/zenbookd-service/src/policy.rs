@@ -261,4 +261,26 @@ mod tests {
 
         assert!(!needs_full_charge(&cfg(80, true, 90), &state, now()));
     }
+
+    #[test]
+    fn a_zero_period_keeps_the_threshold_at_full() {
+        let mut state = State {
+            last_full_charge: Some(now()),
+            ..Default::default()
+        };
+
+        let decision = decide(&cfg(80, true, 0), &mut state, 50, now());
+
+        assert_eq!(decision.target_threshold, 100);
+    }
+
+    #[test]
+    fn a_zero_period_still_holds_full_after_recording_a_full_charge() {
+        let mut state = State::default();
+
+        let decision = decide(&cfg(80, true, 0), &mut state, 100, now());
+
+        assert_eq!(state.last_full_charge, Some(now()));
+        assert_eq!(decision.target_threshold, 100);
+    }
 }

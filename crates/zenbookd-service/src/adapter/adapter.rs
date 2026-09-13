@@ -12,7 +12,7 @@ const TYPE_MAINS: &str = "Mains";
 
 const ONLINE_KEY: &str = "online";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Adapter {
     online: PathBuf,
 }
