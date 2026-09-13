@@ -10,6 +10,10 @@ echo "Installing binaries..."
 sudo cp target/release/zenbookd-service /usr/local/bin/
 sudo cp target/release/zenbookd /usr/local/bin/
 
+echo "Installing fish completions..."
+sudo mkdir -p /usr/local/share/fish/vendor_completions.d
+./target/release/zenbookd completions | sudo tee /usr/local/share/fish/vendor_completions.d/zenbookd.fish >/dev/null
+
 echo "Ensuring zenbookd system user exists..."
 if ! id zenbookd &>/dev/null; then
     sudo useradd --system --no-create-home \

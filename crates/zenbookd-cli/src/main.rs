@@ -1,7 +1,13 @@
+mod completions;
 mod status;
 mod ui;
 
-use std::{io::ErrorKind, os::unix::net::UnixStream, process::ExitCode, time::Duration};
+use std::{
+    io::{self, ErrorKind},
+    os::unix::net::UnixStream,
+    process::ExitCode,
+    time::Duration,
+};
 
 use clap::{
     Parser, Subcommand,
@@ -97,6 +103,9 @@ enum Commands {
 
     /// Re-read /etc/zenbookd/config.toml without restarting the service
     Reload,
+
+    #[command(hide = true)]
+    Completions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
@@ -168,7 +177,9 @@ fn confirmation(command: &Commands) -> String {
 
         Commands::Reload => "Configuration reloaded".to_string(),
 
-        Commands::Status => unreachable!("status never returns Response::Ok"),
+        Commands::Status | Commands::Completions => {
+            unreachable!("status and completions never return Response::Ok")
+        }
     }
 }
 
@@ -203,6 +214,12 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let request = match &cli.command {
+        Commands::Completions => {
+            return match completions::write_fish(&mut io::stdout()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_) => ExitCode::FAILURE,
+            };
+        }
         Commands::Status => Request::GetStatus,
         Commands::SetLimit { limit } => Request::SetChargeLimit(*limit),
         Commands::Boost { stop } => Request::SetBoost(!stop),

@@ -18,6 +18,9 @@ echo "Removing binaries..."
 sudo rm -f /usr/local/bin/zenbookd-service
 sudo rm -f /usr/local/bin/zenbookd
 
+echo "Removing fish completions..."
+sudo rm -f /usr/local/share/fish/vendor_completions.d/zenbookd.fish
+
 echo "Note: system user zenbookd is left in place."
 echo "Note: /etc/zenbookd and /var/lib/zenbookd are not removed to preserve your settings and state."
 echo "If you want to remove them, run:"
