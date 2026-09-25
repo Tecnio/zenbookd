@@ -21,7 +21,7 @@ log = "0.4.34"
 
 env_logger = { version = "0.11.11", default-features = false, features = ["auto-color"] }
 
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 
 serde = { version = "1.0.229", features = ["derive"] }
 
