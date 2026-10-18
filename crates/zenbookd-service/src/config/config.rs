@@ -1,8 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ConfigLoadError, ConfigSaveError, atomic};
+use crate::config::{ConfigLoadError, ConfigSaveError, OutOfRange, atomic};
 
 pub const MIN_CHARGE_LIMIT: u32 = 1;
 pub const MAX_CHARGE_LIMIT: u32 = 100;
@@ -19,26 +22,24 @@ enable_periodic_full_charge = true
 # The period in days for the full charge.
 full_charge_period = 30
 
+# How long in minutes the battery has to sit at 100% before a full charge counts.
+full_charge_hold = 60
+
 # When enabled, Wi-Fi power saving is disabled while on AC power.
 disable_wifi_power_save_on_ac = true
 ";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    // The percentage the battery is held at. Values outside MIN_CHARGE_LIMIT..=MAX_CHARGE_LIMIT
-    // are clamped on load; 0 is invalid because the kernel rejects a zero end-threshold.
     pub charge_limit: u32,
 
-    // This will allow toggling the full battery charging setting without changing the value.
-    // If disabled the full_charge_period will be ignored.
     pub enable_periodic_full_charge: bool,
 
-    // The duration of time in days where the battery will ignore the charge limit and
-    // charge until the battery is fully charged to allow the BMS to calibrate itself.
     pub full_charge_period: u32,
 
-    // When enabled the Wi-Fi power saving features are disabled while the device is plugged
-    // into AC power and restored to their original state once unplugged.
+    #[serde(default = "default_full_charge_hold")]
+    pub full_charge_hold: u32,
+
     #[serde(default = "default_true")]
     pub disable_wifi_power_save_on_ac: bool,
 }
@@ -47,19 +48,20 @@ fn default_true() -> bool {
     true
 }
 
+fn default_full_charge_hold() -> u32 {
+    DEFAULT_FULL_CHARGE_HOLD
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
-            // The default config will allow the battery to fully charge itself.
             charge_limit: 100,
 
-            // By default the periodic full charge modes will be enabled as IsraelGPT has
-            // informed me that that's probably the way to go.
             enable_periodic_full_charge: true,
 
-            // By default the full recharge will be done every every 2 months.
-            // as again IsraelGPT told me that's a good idea.
             full_charge_period: 90,
+
+            full_charge_hold: DEFAULT_FULL_CHARGE_HOLD,
 
             disable_wifi_power_save_on_ac: true,
         }
@@ -67,6 +69,10 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn full_charge_hold(&self) -> Duration {
+        Duration::from_secs(u64::from(self.full_charge_hold) * 60)
+    }
+
     fn clamp_charge_limit(&mut self) {
         let clamped = self.charge_limit.clamp(MIN_CHARGE_LIMIT, MAX_CHARGE_LIMIT);
 
@@ -96,28 +102,52 @@ impl Config {
             self.full_charge_period = clamped;
         }
     }
+
+    fn clamp_full_charge_hold(&mut self) {
+        let clamped = self
+            .full_charge_hold
+            .clamp(MIN_FULL_CHARGE_HOLD, MAX_FULL_CHARGE_HOLD);
+
+        if clamped != self.full_charge_hold {
+            log::warn!(
+                "Full charge hold {} is out of range, using {}",
+                self.full_charge_hold,
+                clamped
+            );
+
+            self.full_charge_hold = clamped;
+        }
+    }
 }
 
-pub fn validate_charge_limit(limit: u32) -> Result<(), String> {
+pub fn validate_charge_limit(limit: u32) -> Result<(), OutOfRange> {
     if (MIN_CHARGE_LIMIT..=MAX_CHARGE_LIMIT).contains(&limit) {
         Ok(())
     } else {
-        Err(format!(
-            "Charge limit must be between {MIN_CHARGE_LIMIT} and {MAX_CHARGE_LIMIT}, got {limit}"
-        ))
+        Err(OutOfRange::ChargeLimit(limit))
     }
 }
 
 pub const MIN_FULL_CHARGE_PERIOD: u32 = 1;
 pub const MAX_FULL_CHARGE_PERIOD: u32 = 365;
 
-pub fn validate_full_charge_period(days: u32) -> Result<(), String> {
+pub fn validate_full_charge_period(days: u32) -> Result<(), OutOfRange> {
     if (MIN_FULL_CHARGE_PERIOD..=MAX_FULL_CHARGE_PERIOD).contains(&days) {
         Ok(())
     } else {
-        Err(format!(
-            "Full charge period must be between {MIN_FULL_CHARGE_PERIOD} and {MAX_FULL_CHARGE_PERIOD}, got {days}"
-        ))
+        Err(OutOfRange::FullChargePeriod(days))
+    }
+}
+
+pub const MIN_FULL_CHARGE_HOLD: u32 = 1;
+pub const MAX_FULL_CHARGE_HOLD: u32 = 720;
+pub const DEFAULT_FULL_CHARGE_HOLD: u32 = 60;
+
+pub fn validate_full_charge_hold(minutes: u32) -> Result<(), OutOfRange> {
+    if (MIN_FULL_CHARGE_HOLD..=MAX_FULL_CHARGE_HOLD).contains(&minutes) {
+        Ok(())
+    } else {
+        Err(OutOfRange::FullChargeHold(minutes))
     }
 }
 
@@ -135,6 +165,7 @@ pub fn load_config_from(path: &Path) -> Result<Config, ConfigLoadError> {
 
     config.clamp_charge_limit();
     config.clamp_full_charge_period();
+    config.clamp_full_charge_hold();
 
     Ok(config)
 }
@@ -154,6 +185,7 @@ pub fn save_config_to(path: &Path, cfg: &Config) -> Result<(), ConfigSaveError> 
     doc["charge_limit"] = value(cfg.charge_limit as i64);
     doc["enable_periodic_full_charge"] = value(cfg.enable_periodic_full_charge);
     doc["full_charge_period"] = value(cfg.full_charge_period as i64);
+    doc["full_charge_hold"] = value(cfg.full_charge_hold as i64);
     doc["disable_wifi_power_save_on_ac"] = value(cfg.disable_wifi_power_save_on_ac);
 
     atomic::write(path, &doc.to_string()).map_err(Into::into)
@@ -181,6 +213,7 @@ mod tests {
         assert_eq!(cfg.charge_limit, 100);
         assert!(cfg.enable_periodic_full_charge);
         assert_eq!(cfg.full_charge_period, 90);
+        assert_eq!(cfg.full_charge_hold, 60);
         assert!(cfg.disable_wifi_power_save_on_ac);
     }
 
@@ -195,6 +228,50 @@ full_charge_period = 30
         let cfg: Config = toml::from_str(text).unwrap();
 
         assert!(cfg.disable_wifi_power_save_on_ac);
+        assert_eq!(cfg.full_charge_hold, DEFAULT_FULL_CHARGE_HOLD);
+    }
+
+    #[test]
+    fn full_charge_hold_is_read_as_minutes() {
+        let cfg = Config {
+            full_charge_hold: 90,
+            ..Config::default()
+        };
+
+        assert_eq!(cfg.full_charge_hold(), Duration::from_secs(90 * 60));
+    }
+
+    #[test]
+    fn out_of_range_full_charge_hold_is_clamped() {
+        let mut zero = Config {
+            full_charge_hold: 0,
+            ..Config::default()
+        };
+        let mut huge = Config {
+            full_charge_hold: 5000,
+            ..Config::default()
+        };
+
+        zero.clamp_full_charge_hold();
+        huge.clamp_full_charge_hold();
+
+        assert_eq!(zero.full_charge_hold, MIN_FULL_CHARGE_HOLD);
+        assert_eq!(huge.full_charge_hold, MAX_FULL_CHARGE_HOLD);
+    }
+
+    #[test]
+    fn validation_bounds_the_full_charge_hold() {
+        assert!(validate_full_charge_hold(MIN_FULL_CHARGE_HOLD).is_ok());
+        assert!(validate_full_charge_hold(MAX_FULL_CHARGE_HOLD).is_ok());
+
+        assert!(matches!(
+            validate_full_charge_hold(0),
+            Err(OutOfRange::FullChargeHold(0))
+        ));
+        assert!(matches!(
+            validate_full_charge_hold(MAX_FULL_CHARGE_HOLD + 1),
+            Err(OutOfRange::FullChargeHold(_))
+        ));
     }
 
     #[test]
@@ -208,6 +285,7 @@ full_charge_period = 30
             charge_limit: 75,
             enable_periodic_full_charge: false,
             full_charge_period: 45,
+            full_charge_hold: 30,
             disable_wifi_power_save_on_ac: false,
         };
 
@@ -427,6 +505,7 @@ some_future_key = \"keep me\"
             charge_limit: 65,
             enable_periodic_full_charge: false,
             full_charge_period: 45,
+            full_charge_hold: 30,
             disable_wifi_power_save_on_ac: false,
         };
 
@@ -481,6 +560,7 @@ some_future_key = \"keep me\"
             charge_limit: 55,
             enable_periodic_full_charge: true,
             full_charge_period: 60,
+            full_charge_hold: 120,
             disable_wifi_power_save_on_ac: false,
         };
 

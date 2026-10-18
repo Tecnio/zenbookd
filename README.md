@@ -17,10 +17,11 @@ daemon's socket. Log back in (or run `newgrp zenbookd`) before the CLI will work
 ```sh
 zenbookd status                       # current charge, health and config
 zenbookd set-limit 80                 # hold the battery at 80%
-zenbookd boost                        # charge to 100% now, restore the limit after
+zenbookd boost                        # charge to 100% and hold it, restore the limit after
 zenbookd boost --stop                 # cancel an active boost early
 zenbookd set-periodic-charge on       # enable/disable periodic full charge
 zenbookd set-charge-period 30         # days between periodic full charges
+zenbookd set-charge-hold 60           # minutes to sit at 100% for a full charge
 zenbookd set-wifi-power-save on       # disable Wi-Fi power saving while on AC
 zenbookd reload                       # re-read config.toml without restarting
 zenbookd --version                    # print the version
@@ -39,6 +40,7 @@ zenbookd --version                    # print the version
 │   Charge limit          80%             │
 │   Applied threshold     100%  boost     │
 │   Periodic full charge  every 30 days   │
+│   Full charge hold      60 min          │
 │   Last full charge      12 days ago     │
 │   Boost                 23h 9m left     │
 │                                         │
@@ -63,9 +65,18 @@ enable_periodic_full_charge = true
 # How often that full charge happens, in days.
 full_charge_period = 30
 
+# How long the battery has to sit at 100%, in minutes, before a boost ends or a
+# periodic full charge counts, so the BMS gets time to calibrate.
+full_charge_hold = 60
+
 # Disable Wi-Fi power saving while on AC power, restoring it once unplugged.
 disable_wifi_power_save_on_ac = true
 ```
+
+Only time the daemon actually watches the battery at 100% counts towards the hold.
+Time spent powered off or suspended does not, and neither does anything before a
+restart, so after booting at 100% the battery still has to sit there for the whole
+hold. Dropping below 100% starts it over.
 
 Changes made through the CLI are written back here, preserving comments and any
 other keys already in the file, so edits and commands stay in sync. Hand edits

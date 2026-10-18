@@ -16,6 +16,7 @@ use crate::{
     adapter::Adapter,
     battery::Battery,
     config::{Config, PersistentState, State, flush_state, load_config, load_state},
+    policy::FullChargeClock,
     wake::Wake,
     wifi::Wifi,
 };
@@ -37,6 +38,7 @@ fn main() {
     let battery = Arc::new(Battery::find().expect("Failed to detect battery"));
     let config = Arc::new(RwLock::new(cfg));
     let state = Arc::new(Mutex::new(PersistentState::new(load_initial_state())));
+    let clock = Arc::new(Mutex::new(FullChargeClock::default()));
 
     let wake = Arc::new(Wake::new());
 
@@ -46,6 +48,7 @@ fn main() {
     let battery_clone = Arc::clone(&battery);
     let config_clone = Arc::clone(&config);
     let state_clone = Arc::clone(&state);
+    let clock_clone = Arc::clone(&clock);
     let wake_clone = Arc::clone(&wake);
     let threshold_error_clone = Arc::clone(&threshold_error);
 
@@ -54,6 +57,7 @@ fn main() {
             battery_clone,
             config_clone,
             state_clone,
+            clock_clone,
             wake_clone,
             threshold_error_clone,
         );
@@ -67,7 +71,17 @@ fn main() {
         monitor_power(config_clone, state_clone, wake_clone);
     });
 
-    if let Err(err) = ipc::run_server(config, battery, state, wake, threshold_error, config_error) {
+    let shared = ipc::Shared {
+        config,
+        battery,
+        state,
+        clock,
+        wake,
+        threshold_error,
+        config_error,
+    };
+
+    if let Err(err) = ipc::run_server(shared) {
         log::error!("Failed to start IPC server: {err}");
         std::process::exit(1);
     }
@@ -132,6 +146,7 @@ fn monitor_battery(
     battery: Arc<Battery>,
     config: Arc<RwLock<Config>>,
     state: Arc<Mutex<PersistentState>>,
+    clock: Arc<Mutex<FullChargeClock>>,
     wake: Arc<Wake>,
     threshold_error: Reported,
 ) {
@@ -153,11 +168,21 @@ fn monitor_battery(
             }
         };
 
+        let held = clock
+            .lock()
+            .unwrap()
+            .observe(current_capacity, Instant::now());
+
         let target_threshold = {
             let mut state = state.lock().unwrap();
 
-            let decision =
-                policy::decide(&cfg, state.data_mut(), current_capacity, chrono::Utc::now());
+            let decision = policy::decide(
+                &cfg,
+                state.data_mut(),
+                current_capacity,
+                held,
+                chrono::Utc::now(),
+            );
 
             if decision.state_dirty {
                 state.mark_dirty();

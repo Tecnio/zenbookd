@@ -44,6 +44,9 @@ enable_periodic_full_charge = true
 # The period in days for the full charge.
 full_charge_period = 30
 
+# How long in minutes the battery has to sit at 100% before a full charge counts.
+full_charge_hold = 60
+
 # When enabled, Wi-Fi power saving is disabled while on AC power.
 disable_wifi_power_save_on_ac = true
 EOF

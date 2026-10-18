@@ -7,7 +7,7 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, RwLock},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use zenbookd_ipc::{Request, Response, ServiceStatus, socket_path};
@@ -16,8 +16,9 @@ use crate::{
     battery::Battery,
     config::{
         Config, PersistentState, flush_state, save_config, save_state, validate_charge_limit,
-        validate_full_charge_period,
+        validate_full_charge_hold, validate_full_charge_period,
     },
+    policy::FullChargeClock,
     wake::Wake,
 };
 
@@ -26,14 +27,18 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 type Reported = Arc<Mutex<Option<String>>>;
 
-pub fn run_server(
-    config: Arc<RwLock<Config>>,
-    battery: Arc<Battery>,
-    state: Arc<Mutex<PersistentState>>,
-    wake: Arc<Wake>,
-    threshold_error: Reported,
-    config_error: Reported,
-) -> std::io::Result<()> {
+#[derive(Clone)]
+pub struct Shared {
+    pub config: Arc<RwLock<Config>>,
+    pub battery: Arc<Battery>,
+    pub state: Arc<Mutex<PersistentState>>,
+    pub clock: Arc<Mutex<FullChargeClock>>,
+    pub wake: Arc<Wake>,
+    pub threshold_error: Reported,
+    pub config_error: Reported,
+}
+
+pub fn run_server(shared: Shared) -> std::io::Result<()> {
     let socket_path = socket_path();
     let path = Path::new(&socket_path);
 
@@ -62,23 +67,10 @@ pub fn run_server(
                     continue;
                 }
 
-                let config = Arc::clone(&config);
-                let battery = Arc::clone(&battery);
-                let state = Arc::clone(&state);
-                let wake = Arc::clone(&wake);
-                let threshold_error = Arc::clone(&threshold_error);
-                let config_error = Arc::clone(&config_error);
+                let shared = shared.clone();
 
                 thread::spawn(move || {
-                    if let Err(err) = handle_client(
-                        stream,
-                        config,
-                        battery,
-                        state,
-                        wake,
-                        threshold_error,
-                        config_error,
-                    ) {
+                    if let Err(err) = handle_client(stream, shared) {
                         log::error!("Error handling IPC client: {err}");
                     }
                 });
@@ -119,21 +111,21 @@ fn update_config(
     }
 }
 
-fn handle_client(
-    mut stream: UnixStream,
-    config: Arc<RwLock<Config>>,
-    battery: Arc<Battery>,
-    state: Arc<Mutex<PersistentState>>,
-    wake: Arc<Wake>,
-    threshold_error: Reported,
-    config_error: Reported,
-) -> std::io::Result<()> {
+fn handle_client(mut stream: UnixStream, shared: Shared) -> std::io::Result<()> {
+    let Shared {
+        config,
+        battery,
+        state,
+        clock,
+        wake,
+        threshold_error,
+        config_error,
+    } = shared;
+
     let request: Request = match zenbookd_ipc::receive_message(&mut stream) {
         Ok(req) => req,
 
         Err(err) => {
-            // An oversized or truncated frame leaves the stream desynced, so the
-            // only safe reply is none — close and let the client reconnect.
             if let zenbookd_ipc::IpcError::Json(err) = &err {
                 let response = Response::Error(format!("Invalid request: {err}"));
 
@@ -166,6 +158,7 @@ fn handle_client(
 
                 enable_periodic_full_charge: cfg.enable_periodic_full_charge,
                 full_charge_period: cfg.full_charge_period,
+                full_charge_hold: Some(cfg.full_charge_hold),
 
                 battery_health: battery.health().ok(),
                 battery_charge: battery.capacity().ok(),
@@ -175,6 +168,11 @@ fn handle_client(
                 boost_until,
                 last_full_charge,
                 calibration_active,
+                held_at_full: clock
+                    .lock()
+                    .unwrap()
+                    .held(Instant::now())
+                    .map(|held| held.as_secs()),
 
                 threshold_error: threshold_error.lock().unwrap().clone(),
                 config_error: config_error.lock().unwrap().clone(),
@@ -188,7 +186,7 @@ fn handle_client(
                 Err(err) => {
                     log::warn!("Rejected charge limit: {err}");
 
-                    Response::Error(err)
+                    Response::Error(err.to_string())
                 }
 
                 Ok(()) => update_config(&config, &config_error, |cfg| cfg.charge_limit = limit),
@@ -203,10 +201,20 @@ fn handle_client(
             Err(err) => {
                 log::warn!("Rejected full charge period: {err}");
 
-                Response::Error(err)
+                Response::Error(err.to_string())
             }
 
             Ok(()) => update_config(&config, &config_error, |cfg| cfg.full_charge_period = days),
+        },
+
+        Request::SetFullChargeHold(minutes) => match validate_full_charge_hold(minutes) {
+            Err(err) => {
+                log::warn!("Rejected full charge hold: {err}");
+
+                Response::Error(err.to_string())
+            }
+
+            Ok(()) => update_config(&config, &config_error, |cfg| cfg.full_charge_hold = minutes),
         },
 
         Request::SetWifiPowerSave(disable_on_ac) => update_config(&config, &config_error, |cfg| {
@@ -236,7 +244,7 @@ fn handle_client(
             let until = if enable {
                 let until = chrono::Utc::now() + chrono::Duration::hours(BOOST_DURATION_HOURS);
 
-                log::info!("Boost enabled until {until} (or until fully charged)");
+                log::info!("Boost enabled until {until} (or until held at full)");
                 Some(until)
             } else {
                 log::info!("Boost cancelled");
@@ -272,8 +280,6 @@ fn handle_client(
         }
     };
 
-    // Force every monitor thread to re-evaluate now instead of waiting for its
-    // next poll tick, so a command takes effect immediately.
     wake.notify();
 
     if let Err(err) = zenbookd_ipc::send_message(&mut stream, &response) {

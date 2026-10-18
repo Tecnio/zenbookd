@@ -4,7 +4,8 @@ mod error;
 mod state;
 
 pub use config::{
-    Config, load_config, save_config, validate_charge_limit, validate_full_charge_period,
+    Config, load_config, save_config, validate_charge_limit, validate_full_charge_hold,
+    validate_full_charge_period,
 };
-pub use error::{ConfigLoadError, ConfigSaveError};
+pub use error::{ConfigLoadError, ConfigSaveError, OutOfRange};
 pub use state::{PersistentState, State, flush_state, load_state, save_state};

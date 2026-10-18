@@ -36,6 +36,10 @@ fn examples() -> String {
         ("set-limit 80", "hold the battery at 80%"),
         ("boost", "charge to 100% now, restore the limit after"),
         ("set-charge-period 30", "days between periodic full charges"),
+        (
+            "set-charge-hold 60",
+            "minutes to sit at 100% for a full charge",
+        ),
         ("reload", "re-read config.toml without restarting"),
     ];
 
@@ -66,42 +70,54 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Show the current battery and service status
+    #[command(about = "Show the current battery and service status")]
     Status,
 
-    /// Set the maximum battery charge limit
+    #[command(about = "Set the maximum battery charge limit")]
     SetLimit {
-        /// Charge limit percentage (1-100)
-        #[arg(value_parser = clap::value_parser!(u32).range(1..=100))]
+        #[arg(
+            help = "Charge limit percentage (1-100)",
+            value_parser = clap::value_parser!(u32).range(1..=100)
+        )]
         limit: u32,
     },
 
-    /// Charge to 100% for the next 24 hours or until full, then restore the limit
+    #[command(
+        about = "Charge to 100% and hold it there for the charge hold, then restore the limit"
+    )]
     Boost {
-        /// Cancel an active boost and restore the charge limit immediately
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Cancel an active boost and restore the charge limit immediately"
+        )]
         stop: bool,
     },
 
-    /// Enable or disable the periodic full charge
+    #[command(about = "Enable or disable the periodic full charge")]
     SetPeriodicCharge {
         #[arg(value_enum)]
         state: Toggle,
     },
 
-    /// Set how many days between periodic full charges
+    #[command(about = "Set how many days between periodic full charges")]
     SetChargePeriod {
         #[arg(value_parser = clap::value_parser!(u32).range(1..=365))]
         days: u32,
     },
 
-    /// Disable Wi-Fi power saving while on AC power
+    #[command(about = "Set how many minutes the battery has to sit at 100% for a full charge")]
+    SetChargeHold {
+        #[arg(value_parser = clap::value_parser!(u32).range(1..=720))]
+        minutes: u32,
+    },
+
+    #[command(about = "Disable Wi-Fi power saving while on AC power")]
     SetWifiPowerSave {
         #[arg(value_enum)]
         state: Toggle,
     },
 
-    /// Re-read /etc/zenbookd/config.toml without restarting the service
+    #[command(about = "Re-read /etc/zenbookd/config.toml without restarting the service")]
     Reload,
 
     #[command(hide = true)]
@@ -152,7 +168,7 @@ fn confirmation(command: &Commands) -> String {
         Commands::SetLimit { limit } => format!("Charge limit set to {limit}%"),
 
         Commands::Boost { stop: false } => {
-            "Boost enabled, charging to 100% until full or for 24h".to_string()
+            "Boost enabled, holding 100% for the charge hold or for 24h".to_string()
         }
 
         Commands::Boost { stop: true } => "Boost cancelled, charge limit restored".to_string(),
@@ -166,6 +182,8 @@ fn confirmation(command: &Commands) -> String {
         }
 
         Commands::SetChargePeriod { days } => format!("Charge period set to {days} days"),
+
+        Commands::SetChargeHold { minutes } => format!("Charge hold set to {minutes} minutes"),
 
         Commands::SetWifiPowerSave { state: Toggle::On } => {
             "Wi-Fi power saving disabled on AC".to_string()
@@ -227,6 +245,7 @@ fn main() -> ExitCode {
             Request::SetPeriodicFullCharge(*state == Toggle::On)
         }
         Commands::SetChargePeriod { days } => Request::SetFullChargePeriod(*days),
+        Commands::SetChargeHold { minutes } => Request::SetFullChargeHold(*minutes),
         Commands::SetWifiPowerSave { state } => Request::SetWifiPowerSave(*state == Toggle::On),
         Commands::Reload => Request::ReloadConfig,
     };

@@ -99,6 +99,28 @@ fn last_full_charge(status: &ServiceStatus) -> Line {
     }
 }
 
+fn hold(status: &ServiceStatus) -> Option<Line> {
+    let minutes = status.full_charge_hold?;
+
+    let mut line = Line::new()
+        .push(minutes.to_string(), Tone::Accent)
+        .plain(" min");
+
+    if let Some(held) = status.held_at_full {
+        let held_minutes = held / 60;
+
+        let tone = if held_minutes >= u64::from(minutes) {
+            Tone::Ok
+        } else {
+            Tone::Dim
+        };
+
+        line = line.push(format!("  {held_minutes}m at full"), tone);
+    }
+
+    Some(line)
+}
+
 fn boost(status: &ServiceStatus) -> Line {
     let Some(until) = status.boost_until else {
         return Line::new().push("off", Tone::Dim);
@@ -130,6 +152,11 @@ fn config_rows(status: &ServiceStatus) -> Vec<Row> {
     }
 
     rows.push(ui::field("Periodic full charge", periodic(status)));
+
+    if let Some(line) = hold(status) {
+        rows.push(ui::field("Full charge hold", line));
+    }
+
     rows.push(ui::field("Last full charge", last_full_charge(status)));
     rows.push(ui::field("Boost", boost(status)));
 

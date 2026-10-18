@@ -1,11 +1,36 @@
+use std::time::{Duration, Instant};
+
 use chrono::{DateTime, Utc};
 
 use crate::config::{Config, State};
+
+pub const FULL_CAPACITY: u32 = 100;
 
 #[derive(Debug, PartialEq)]
 pub struct Decision {
     pub target_threshold: u32,
     pub state_dirty: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct FullChargeClock {
+    since: Option<Instant>,
+}
+
+impl FullChargeClock {
+    pub fn observe(&mut self, capacity: u32, at: Instant) -> Duration {
+        if capacity < FULL_CAPACITY {
+            self.since = None;
+
+            return Duration::ZERO;
+        }
+
+        at.saturating_duration_since(*self.since.get_or_insert(at))
+    }
+
+    pub fn held(&self, at: Instant) -> Option<Duration> {
+        self.since.map(|since| at.saturating_duration_since(since))
+    }
 }
 
 pub fn needs_full_charge(cfg: &Config, state: &State, now: DateTime<Utc>) -> bool {
@@ -20,22 +45,34 @@ pub fn needs_full_charge(cfg: &Config, state: &State, now: DateTime<Utc>) -> boo
     }
 }
 
-pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>) -> Decision {
+pub fn decide(
+    cfg: &Config,
+    state: &mut State,
+    capacity: u32,
+    held: Duration,
+    now: DateTime<Utc>,
+) -> Decision {
     let mut state_dirty = false;
 
-    if capacity >= 100
+    let hold = cfg.full_charge_hold();
+    let calibrated = capacity >= FULL_CAPACITY && held >= hold;
+
+    if calibrated
         && state
             .last_full_charge
-            .is_none_or(|last| (now - last).num_minutes() > 60)
+            .is_none_or(|last| (now - last).to_std().is_ok_and(|since| since >= hold))
     {
         state.last_full_charge = Some(now);
         state_dirty = true;
 
-        log::info!("Updated last full charge timestamp");
+        log::info!(
+            "Battery held at full for {}m, updated last full charge",
+            hold.as_secs() / 60
+        );
     }
 
     let boost_active = match state.boost_until {
-        Some(until) if now < until && capacity < 100 => true,
+        Some(until) if now < until && !calibrated => true,
 
         Some(_) => {
             state.boost_until = None;
@@ -52,13 +89,13 @@ pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>
     let mut target_threshold = cfg.charge_limit;
 
     if needs_full_charge(cfg, state, now) {
-        log::debug!("Periodic full charge needed, setting threshold to 100");
-        target_threshold = 100;
+        log::debug!("Periodic full charge needed, setting threshold to {FULL_CAPACITY}");
+        target_threshold = FULL_CAPACITY;
     }
 
     if boost_active {
-        log::debug!("Boost active, setting threshold to 100");
-        target_threshold = 100;
+        log::debug!("Boost active, setting threshold to {FULL_CAPACITY}");
+        target_threshold = FULL_CAPACITY;
     }
 
     Decision {
@@ -71,6 +108,8 @@ pub fn decide(cfg: &Config, state: &mut State, capacity: u32, now: DateTime<Utc>
 mod tests {
     use super::*;
 
+    const HOUR: Duration = Duration::from_secs(3600);
+
     fn now() -> DateTime<Utc> {
         "2026-01-15T12:00:00Z".parse().unwrap()
     }
@@ -80,15 +119,16 @@ mod tests {
             charge_limit,
             enable_periodic_full_charge: periodic,
             full_charge_period: period,
+            full_charge_hold: 60,
             disable_wifi_power_save_on_ac: true,
         }
     }
 
     #[test]
-    fn records_first_full_charge() {
+    fn records_first_full_charge_once_held() {
         let mut state = State::default();
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 100, now());
+        let decision = decide(&cfg(80, false, 90), &mut state, 100, HOUR, now());
 
         assert!(decision.state_dirty);
         assert_eq!(state.last_full_charge, Some(now()));
@@ -96,27 +136,53 @@ mod tests {
     }
 
     #[test]
-    fn does_not_rewrite_full_charge_within_the_hour() {
+    fn full_charge_is_not_recorded_before_the_hold_elapses() {
+        let mut state = State::default();
+
+        let decision = decide(
+            &cfg(80, false, 90),
+            &mut state,
+            100,
+            Duration::from_secs(59 * 60),
+            now(),
+        );
+
+        assert!(!decision.state_dirty);
+        assert!(state.last_full_charge.is_none());
+    }
+
+    #[test]
+    fn full_charge_is_not_recorded_below_full() {
+        let mut state = State::default();
+
+        let decision = decide(&cfg(80, false, 90), &mut state, 99, HOUR * 2, now());
+
+        assert!(!decision.state_dirty);
+        assert!(state.last_full_charge.is_none());
+    }
+
+    #[test]
+    fn does_not_rewrite_full_charge_within_the_hold() {
         let mut state = State {
             last_full_charge: Some(now() - chrono::Duration::minutes(30)),
             ..Default::default()
         };
         let before = state.clone();
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 100, now());
+        let decision = decide(&cfg(80, false, 90), &mut state, 100, HOUR * 3, now());
 
         assert!(!decision.state_dirty);
         assert_eq!(state, before);
     }
 
     #[test]
-    fn refreshes_full_charge_after_an_hour() {
+    fn refreshes_full_charge_after_another_hold() {
         let mut state = State {
             last_full_charge: Some(now() - chrono::Duration::hours(2)),
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 100, now());
+        let decision = decide(&cfg(80, false, 90), &mut state, 100, HOUR * 3, now());
 
         assert!(decision.state_dirty);
         assert_eq!(state.last_full_charge, Some(now()));
@@ -130,7 +196,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 80, now());
+        let decision = decide(&cfg(80, false, 90), &mut state, 80, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 100);
         assert!(!decision.state_dirty);
@@ -145,7 +211,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 80, now());
+        let decision = decide(&cfg(80, false, 90), &mut state, 80, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 80);
         assert!(decision.state_dirty);
@@ -153,14 +219,35 @@ mod tests {
     }
 
     #[test]
-    fn boost_ends_when_battery_reaches_full() {
+    fn boost_keeps_holding_full_until_the_hold_elapses() {
         let mut state = State {
             last_full_charge: Some(now() - chrono::Duration::minutes(30)),
             boost_until: Some(now() + chrono::Duration::hours(1)),
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 100, now());
+        let decision = decide(
+            &cfg(80, false, 90),
+            &mut state,
+            100,
+            Duration::from_secs(30 * 60),
+            now(),
+        );
+
+        assert_eq!(decision.target_threshold, 100);
+        assert!(!decision.state_dirty);
+        assert!(state.boost_until.is_some());
+    }
+
+    #[test]
+    fn boost_ends_once_held_at_full_for_the_hold() {
+        let mut state = State {
+            last_full_charge: Some(now() - chrono::Duration::minutes(30)),
+            boost_until: Some(now() + chrono::Duration::hours(1)),
+            ..Default::default()
+        };
+
+        let decision = decide(&cfg(80, false, 90), &mut state, 100, HOUR, now());
 
         assert_eq!(decision.target_threshold, 80);
         assert!(decision.state_dirty);
@@ -168,10 +255,60 @@ mod tests {
     }
 
     #[test]
+    fn boost_honours_a_custom_hold() {
+        let mut state = State {
+            boost_until: Some(now() + chrono::Duration::hours(5)),
+            ..Default::default()
+        };
+        let cfg = Config {
+            full_charge_hold: 180,
+            ..cfg(80, false, 90)
+        };
+
+        let decision = decide(&cfg, &mut state, 100, HOUR * 2, now());
+
+        assert_eq!(decision.target_threshold, 100);
+        assert!(state.boost_until.is_some());
+    }
+
+    #[test]
+    fn periodic_charge_stays_at_full_until_the_hold_elapses() {
+        let mut state = State {
+            last_full_charge: Some(now() - chrono::Duration::days(91)),
+            ..Default::default()
+        };
+
+        let decision = decide(
+            &cfg(80, true, 90),
+            &mut state,
+            100,
+            Duration::from_secs(10 * 60),
+            now(),
+        );
+
+        assert_eq!(decision.target_threshold, 100);
+        assert!(!decision.state_dirty);
+    }
+
+    #[test]
+    fn periodic_charge_restores_the_limit_once_held() {
+        let mut state = State {
+            last_full_charge: Some(now() - chrono::Duration::days(91)),
+            ..Default::default()
+        };
+
+        let decision = decide(&cfg(80, true, 90), &mut state, 100, HOUR, now());
+
+        assert_eq!(decision.target_threshold, 80);
+        assert!(decision.state_dirty);
+        assert_eq!(state.last_full_charge, Some(now()));
+    }
+
+    #[test]
     fn periodic_charge_triggers_when_never_recorded() {
         let mut state = State::default();
 
-        let decision = decide(&cfg(80, true, 90), &mut state, 50, now());
+        let decision = decide(&cfg(80, true, 90), &mut state, 50, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 100);
         assert!(!decision.state_dirty);
@@ -184,7 +321,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, true, 90), &mut state, 50, now());
+        let decision = decide(&cfg(80, true, 90), &mut state, 50, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 100);
     }
@@ -196,7 +333,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, true, 90), &mut state, 50, now());
+        let decision = decide(&cfg(80, true, 90), &mut state, 50, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 100);
     }
@@ -208,7 +345,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, true, 90), &mut state, 50, now());
+        let decision = decide(&cfg(80, true, 90), &mut state, 50, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 80);
     }
@@ -220,7 +357,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, false, 90), &mut state, 50, now());
+        let decision = decide(&cfg(80, false, 90), &mut state, 50, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 80);
     }
@@ -269,7 +406,7 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = decide(&cfg(80, true, 0), &mut state, 50, now());
+        let decision = decide(&cfg(80, true, 0), &mut state, 50, Duration::ZERO, now());
 
         assert_eq!(decision.target_threshold, 100);
     }
@@ -278,9 +415,33 @@ mod tests {
     fn a_zero_period_still_holds_full_after_recording_a_full_charge() {
         let mut state = State::default();
 
-        let decision = decide(&cfg(80, true, 0), &mut state, 100, now());
+        let decision = decide(&cfg(80, true, 0), &mut state, 100, HOUR, now());
 
         assert_eq!(state.last_full_charge, Some(now()));
         assert_eq!(decision.target_threshold, 100);
+    }
+
+    #[test]
+    fn clock_starts_counting_on_the_first_full_reading() {
+        let mut clock = FullChargeClock::default();
+        let start = Instant::now();
+
+        assert_eq!(clock.held(start), None);
+        assert_eq!(clock.observe(100, start), Duration::ZERO);
+        assert_eq!(clock.observe(100, start + HOUR), HOUR);
+        assert_eq!(clock.held(start + HOUR), Some(HOUR));
+    }
+
+    #[test]
+    fn clock_resets_when_the_charge_drops_below_full() {
+        let mut clock = FullChargeClock::default();
+        let start = Instant::now();
+
+        clock.observe(100, start);
+
+        assert_eq!(clock.observe(99, start + HOUR), Duration::ZERO);
+        assert_eq!(clock.held(start + HOUR), None);
+        assert_eq!(clock.observe(100, start + HOUR * 2), Duration::ZERO);
+        assert_eq!(clock.observe(100, start + HOUR * 3), HOUR);
     }
 }

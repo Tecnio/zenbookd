@@ -24,6 +24,7 @@ pub enum Request {
     SetBoost(bool),
     SetPeriodicFullCharge(bool),
     SetFullChargePeriod(u32),
+    SetFullChargeHold(u32),
     SetWifiPowerSave(bool),
     ReloadConfig,
 }
@@ -48,6 +49,12 @@ pub struct ServiceStatus {
 
     #[serde(default)]
     pub calibration_active: bool,
+
+    #[serde(default)]
+    pub full_charge_hold: Option<u32>,
+
+    #[serde(default)]
+    pub held_at_full: Option<u64>,
 
     #[serde(default)]
     pub threshold_error: Option<String>,
@@ -130,6 +137,12 @@ mod tests {
 
         let decoded: Request = receive_message(&buf[..]).unwrap();
         assert_eq!(decoded, Request::ReloadConfig);
+
+        let mut buf = Vec::new();
+        send_message(&mut buf, &Request::SetFullChargeHold(90)).unwrap();
+
+        let decoded: Request = receive_message(&buf[..]).unwrap();
+        assert_eq!(decoded, Request::SetFullChargeHold(90));
     }
 
     #[test]
@@ -144,6 +157,8 @@ mod tests {
             applied_threshold: Some(100),
             last_full_charge: Some(1_767_000_000),
             calibration_active: true,
+            full_charge_hold: Some(60),
+            held_at_full: Some(1_200),
             threshold_error: Some("permission denied".to_string()),
             config_error: None,
         };
@@ -166,6 +181,8 @@ mod tests {
             Response::Status(s) => {
                 assert_eq!(s.applied_threshold, None);
                 assert!(!s.calibration_active);
+                assert_eq!(s.full_charge_hold, None);
+                assert_eq!(s.held_at_full, None);
                 assert_eq!(s.config_error, None);
             }
 
