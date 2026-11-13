@@ -32,7 +32,9 @@ zenbookd --version                    # print the version
 
 `pixel-refresh` runs `ffplay` (from ffmpeg) fullscreen in your own session, so it
 needs a graphical session and does not go through the daemon. `--hold` sets how many
-seconds each colour stays up in the `cycle` pattern (default 5).
+seconds each colour stays up in the `cycle` pattern (default 5). The pattern is drawn
+at the native mode of the internal panel (or the first connected display), read from
+`/sys/class/drm`; `--size 1920x1080` overrides it.
 
 `status` prints a panel:
 

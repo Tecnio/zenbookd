@@ -17,7 +17,7 @@ use clap::{
 use thiserror::Error;
 use zenbookd_ipc::{Request, Response, socket_path};
 
-use crate::refresh::{Pattern, RefreshError};
+use crate::refresh::{Pattern, RefreshError, Resolution};
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
@@ -146,6 +146,13 @@ enum Commands {
             value_parser = clap::value_parser!(u32).range(1..=600)
         )]
         hold: u32,
+
+        #[arg(
+            long,
+            value_name = "WxH",
+            help = "Screen size to draw at instead of the detected native mode"
+        )]
+        size: Option<Resolution>,
     },
 
     #[command(hide = true)]
@@ -256,10 +263,31 @@ fn report_connect_failure(path: &str, source: &std::io::Error) {
     );
 }
 
-fn pixel_refresh(pattern: Pattern, hold: u32, minutes: Option<u32>) -> ExitCode {
-    ui::success("Pixel refresh started, press q or Esc to stop");
+fn pixel_refresh(
+    pattern: Pattern,
+    size: Option<Resolution>,
+    hold: u32,
+    minutes: Option<u32>,
+) -> ExitCode {
+    let size = match size.map_or_else(refresh::detect_resolution, Ok) {
+        Ok(size) => size,
 
-    match refresh::run(pattern, hold, minutes) {
+        Err(err) => {
+            ui::failure(
+                "Cannot find the screen size",
+                &err.to_string(),
+                Some("Pass it explicitly, e.g. --size 2880x1800"),
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    ui::success(&format!(
+        "Pixel refresh started at {size}, press q or Esc to stop"
+    ));
+
+    match refresh::run(pattern, size, hold, minutes) {
         Ok(()) => {
             ui::success("Pixel refresh finished");
 
@@ -298,7 +326,8 @@ fn main() -> ExitCode {
             pattern,
             minutes,
             hold,
-        } => return pixel_refresh(*pattern, *hold, *minutes),
+            size,
+        } => return pixel_refresh(*pattern, *size, *hold, *minutes),
         Commands::Status => Request::GetStatus,
         Commands::SetLimit { limit } => Request::SetChargeLimit(*limit),
         Commands::Boost { stop } => Request::SetBoost(!stop),
