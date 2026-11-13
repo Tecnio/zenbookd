@@ -1,3 +1,4 @@
+use zenbookd_client::{Level, charge_level, health_level};
 use zenbookd_ipc::ServiceStatus;
 
 use crate::ui::{self, GAUGE_CELLS, Line, Panel, Row, Tone};
@@ -9,23 +10,11 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-fn charge_tone(percent: u32) -> Tone {
-    if percent <= 20 {
-        Tone::Danger
-    } else if percent <= 50 {
-        Tone::Warn
-    } else {
-        Tone::Ok
-    }
-}
-
-fn health_tone(percent: u32) -> Tone {
-    if percent < 80 {
-        Tone::Danger
-    } else if percent < 90 {
-        Tone::Warn
-    } else {
-        Tone::Ok
+fn tone(level: Level) -> Tone {
+    match level {
+        Level::Good => Tone::Ok,
+        Level::Low => Tone::Warn,
+        Level::Critical => Tone::Danger,
     }
 }
 
@@ -40,11 +29,17 @@ fn battery_rows(status: &ServiceStatus) -> Vec<Row> {
     let mut rows = Vec::new();
 
     if let Some(charge) = status.battery_charge {
-        rows.push(ui::field("Charge", reading(charge, charge_tone(charge))));
+        rows.push(ui::field(
+            "Charge",
+            reading(charge, tone(charge_level(charge))),
+        ));
     }
 
     if let Some(health) = status.battery_health {
-        rows.push(ui::field("Health", reading(health, health_tone(health))));
+        rows.push(ui::field(
+            "Health",
+            reading(health, tone(health_level(health))),
+        ));
     }
 
     rows
@@ -139,6 +134,14 @@ fn boost(status: &ServiceStatus) -> Line {
         .plain("m left")
 }
 
+fn wifi(power_save_disabled: bool) -> Line {
+    if power_save_disabled {
+        Line::new().plain("power saving off")
+    } else {
+        Line::new().push("untouched", Tone::Dim)
+    }
+}
+
 fn config_rows(status: &ServiceStatus) -> Vec<Row> {
     let mut rows = vec![ui::field(
         "Charge limit",
@@ -159,6 +162,10 @@ fn config_rows(status: &ServiceStatus) -> Vec<Row> {
 
     rows.push(ui::field("Last full charge", last_full_charge(status)));
     rows.push(ui::field("Boost", boost(status)));
+
+    if let Some(disabled) = status.wifi_power_save_on_ac {
+        rows.push(ui::field("Wi-Fi on AC", wifi(disabled)));
+    }
 
     rows
 }

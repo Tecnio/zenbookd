@@ -39,26 +39,41 @@ at the native mode of the internal panel (or the first connected display), read 
 `status` prints a panel:
 
 ```
-╭─ zenbookd ──────────────────────────────╮
-│                                         │
-│   Charge  ██████████████░░░░░░   72%    │
-│   Health  ███████████████████░   94%    │
-│                                         │
-├─────────────────────────────────────────┤
-│                                         │
-│   Charge limit          80%             │
-│   Applied threshold     100%  boost     │
-│   Periodic full charge  every 30 days   │
-│   Full charge hold      60 min          │
-│   Last full charge      12 days ago     │
-│   Boost                 23h 9m left     │
-│                                         │
-╰─────────────────────────────────────────╯
+╭─ zenbookd ─────────────────────────────────╮
+│                                            │
+│   Charge  ██████████████░░░░░░   72%       │
+│   Health  ███████████████████░   94%       │
+│                                            │
+├────────────────────────────────────────────┤
+│                                            │
+│   Charge limit          80%                │
+│   Applied threshold     100%  boost        │
+│   Periodic full charge  every 30 days      │
+│   Full charge hold      60 min             │
+│   Last full charge      12 days ago        │
+│   Boost                 23h 9m left        │
+│   Wi-Fi on AC           power saving off   │
+│                                            │
+╰────────────────────────────────────────────╯
 ```
 
 Colour follows `NO_COLOR` and is dropped when the output is not a terminal. The box
 falls back to ASCII when the locale is not UTF-8, and to a plain list when the
 terminal is too narrow to hold it.
+
+## Desktop app
+
+`zenbookd-gui` (also in the app launcher as zenbookd) covers the same ground as the
+CLI in one window: charge and health with the limit marked on the charge meter,
+the charge limit, boost, periodic full charge, the full charge hold, the Wi-Fi
+setting and pixel refresh. It polls the daemon every two seconds, so changes made
+from the CLI or by hand show up on their own, and changes made in the window are
+sent once you stop clicking. Hold Shift to step a value by one. If the daemon
+cannot be reached the window says why and keeps trying.
+
+It talks to the same socket as the CLI, so it needs the same `zenbookd` group
+membership. It is built on [gpui](https://github.com/zed-industries/zed) and
+runs on Wayland only.
 
 ## Config
 

@@ -176,6 +176,8 @@ fn handle_client(mut stream: UnixStream, shared: Shared) -> std::io::Result<()> 
 
                 threshold_error: threshold_error.lock().unwrap().clone(),
                 config_error: config_error.lock().unwrap().clone(),
+
+                wifi_power_save_on_ac: Some(cfg.disable_wifi_power_save_on_ac),
             })
         }
 

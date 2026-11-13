@@ -3,7 +3,9 @@ resolver = "3"
 members = [
     "crates/zenbookd-cli",
     "crates/zenbookd-service",
-    "crates/zenbookd-ipc"
+    "crates/zenbookd-ipc",
+    "crates/zenbookd-client",
+    "crates/zenbookd-gui"
 ]
 
 [workspace.lints]
@@ -26,6 +28,31 @@ thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive"] }
 
 serde_json = "1.0.154"
+
+gpui = {
+    git = "https://github.com/zed-industries/zed",
+    rev = "aff99ecc3249cfa95e720c4d6c1eb4a72105a3ee",
+    default-features = false
+}
+gpui_platform = {
+    git = "https://github.com/zed-industries/zed",
+    rev = "aff99ecc3249cfa95e720c4d6c1eb4a72105a3ee",
+    default-features = false
+}
+
+[patch.crates-io]
+async-task = {
+    git = "https://github.com/zed-industries/async-task.git",
+    rev = "015845a19fc31752c02367567d3b8900a406f9da"
+}
+calloop = {
+    git = "https://github.com/zed-industries/calloop",
+    rev = "3759371fee14c40066d64777e2a36b6ffcc22590"
+}
+khronos-egl = {
+    git = "https://github.com/zed-industries/khronos-egl",
+    rev = "42214b36347b108fd9630ca6254b96dde59e04fe"
+}
 
 [profile.release]
 opt-level = 3

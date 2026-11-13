@@ -2,6 +2,7 @@ use std::{env, io::stdout};
 
 use colored::{ColoredString, Colorize};
 use terminal_size::{Width, terminal_size_of};
+use zenbookd_client::sanitize;
 
 const GAP: usize = 2;
 const PAD: usize = 3;
@@ -84,21 +85,6 @@ fn columns() -> usize {
     terminal_size_of(stdout())
         .map(|(Width(width), _)| width as usize)
         .unwrap_or(FALLBACK_COLUMNS)
-}
-
-pub fn sanitize(text: &str) -> String {
-    text.chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[derive(Debug, Clone)]

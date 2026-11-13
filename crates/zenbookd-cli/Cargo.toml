@@ -14,8 +14,7 @@ workspace = true
 
 [dependencies]
 zenbookd-ipc.path = "../zenbookd-ipc"
-
-thiserror.workspace = true
+zenbookd-client.path = "../zenbookd-client"
 
 colored = "3.1.1"
 

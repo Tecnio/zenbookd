@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=zenbookd
+GenericName=Battery charge limit
+Comment=Charge limit, boost and pixel refresh for the Zenbook
+Exec=zenbookd-gui
+Icon=battery
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=battery;charge;limit;oled;
+StartupWMClass=zenbookd

@@ -61,6 +61,9 @@ pub struct ServiceStatus {
 
     #[serde(default)]
     pub config_error: Option<String>,
+
+    #[serde(default)]
+    pub wifi_power_save_on_ac: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -161,6 +164,7 @@ mod tests {
             held_at_full: Some(1_200),
             threshold_error: Some("permission denied".to_string()),
             config_error: None,
+            wifi_power_save_on_ac: Some(true),
         };
 
         let mut buf = Vec::new();
@@ -168,7 +172,10 @@ mod tests {
 
         let decoded: Response = receive_message(&buf[..]).unwrap();
 
-        assert!(matches!(decoded, Response::Status(s) if s.applied_threshold == Some(100)));
+        assert!(matches!(
+            decoded,
+            Response::Status(s) if s.applied_threshold == Some(100) && s.wifi_power_save_on_ac == Some(true)
+        ));
     }
 
     #[test]
@@ -184,6 +191,7 @@ mod tests {
                 assert_eq!(s.full_charge_hold, None);
                 assert_eq!(s.held_at_full, None);
                 assert_eq!(s.config_error, None);
+                assert_eq!(s.wifi_power_save_on_ac, None);
             }
 
             _ => panic!("expected Response::Status"),

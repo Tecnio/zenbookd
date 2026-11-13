@@ -17,6 +17,10 @@ sudo udevadm control --reload || true
 echo "Removing binaries..."
 sudo rm -f /usr/local/bin/zenbookd-service
 sudo rm -f /usr/local/bin/zenbookd
+sudo rm -f /usr/local/bin/zenbookd-gui
+
+echo "Removing desktop entry..."
+sudo rm -f /usr/local/share/applications/zenbookd.desktop
 
 echo "Removing fish completions..."
 sudo rm -f /usr/local/share/fish/vendor_completions.d/zenbookd.fish

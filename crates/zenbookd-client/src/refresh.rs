@@ -2,7 +2,7 @@ use std::{
     fmt, fs,
     io::{self, ErrorKind},
     path::Path,
-    process::{Command, ExitStatus},
+    process::{Child, Command, ExitStatus},
     str::FromStr,
 };
 
@@ -99,12 +99,9 @@ pub fn detect_resolution() -> Result<Resolution, RefreshError> {
     pick(connectors).ok_or(RefreshError::DisplayNotFound)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pattern {
-    #[value(help = "Fullscreen random noise, fast")]
     Noise,
-
-    #[value(help = "Black, red, green, blue and white screens in turn, slow")]
     Cycle,
 }
 
@@ -186,6 +183,33 @@ pub fn ffplay_args(
     args
 }
 
+fn launch_failure(err: io::Error) -> RefreshError {
+    match err.kind() {
+        ErrorKind::NotFound => RefreshError::FfplayMissing,
+        _ => RefreshError::Spawn(err),
+    }
+}
+
+pub fn spawn(
+    pattern: Pattern,
+    size: Resolution,
+    hold_seconds: u32,
+    minutes: Option<u32>,
+) -> Result<Child, RefreshError> {
+    Command::new("ffplay")
+        .args(ffplay_args(pattern, size, hold_seconds, minutes))
+        .spawn()
+        .map_err(launch_failure)
+}
+
+pub fn finished(status: ExitStatus) -> Result<(), RefreshError> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(RefreshError::Exited(status))
+    }
+}
+
 pub fn run(
     pattern: Pattern,
     size: Resolution,
@@ -195,16 +219,9 @@ pub fn run(
     let status = Command::new("ffplay")
         .args(ffplay_args(pattern, size, hold_seconds, minutes))
         .status()
-        .map_err(|err| match err.kind() {
-            ErrorKind::NotFound => RefreshError::FfplayMissing,
-            _ => RefreshError::Spawn(err),
-        })?;
+        .map_err(launch_failure)?;
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(RefreshError::Exited(status))
-    }
+    finished(status)
 }
 
 #[cfg(test)]

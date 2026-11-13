@@ -9,6 +9,11 @@ RUSTFLAGS="-C target-cpu=native" cargo build --release
 echo "Installing binaries..."
 sudo cp target/release/zenbookd-service /usr/local/bin/
 sudo cp target/release/zenbookd /usr/local/bin/
+sudo cp target/release/zenbookd-gui /usr/local/bin/
+
+echo "Installing desktop entry..."
+sudo mkdir -p /usr/local/share/applications
+sudo cp scripts/zenbookd.desktop /usr/local/share/applications/
 
 echo "Installing fish completions..."
 sudo mkdir -p /usr/local/share/fish/vendor_completions.d

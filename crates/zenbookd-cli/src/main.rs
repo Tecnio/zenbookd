@@ -1,23 +1,19 @@
 mod completions;
-mod refresh;
 mod status;
 mod ui;
 
-use std::{
-    io::{self, ErrorKind},
-    os::unix::net::UnixStream,
-    process::ExitCode,
-    time::Duration,
-};
+use std::{io, process::ExitCode};
 
 use clap::{
     Parser, Subcommand,
     builder::styling::{AnsiColor, Effects, Style, Styles},
 };
-use thiserror::Error;
-use zenbookd_ipc::{Request, Response, socket_path};
-
-use crate::refresh::{Pattern, RefreshError, Resolution};
+use zenbookd_client::{
+    ClientError, connect_hint,
+    refresh::{self, Pattern, RefreshError, Resolution},
+    send_request,
+};
+use zenbookd_ipc::{Request, Response};
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
@@ -27,8 +23,6 @@ const STYLES: Styles = Styles::styled()
     .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
     .valid(AnsiColor::Green.on_default())
     .invalid(AnsiColor::Yellow.on_default());
-
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 const HEADER: Style = AnsiColor::Cyan.on_default().effects(Effects::BOLD);
 const LITERAL: Style = AnsiColor::Green.on_default();
@@ -130,7 +124,7 @@ enum Commands {
     #[command(about = "Play a fullscreen pattern to clear OLED image retention")]
     PixelRefresh {
         #[arg(value_enum, default_value = "noise")]
-        pattern: Pattern,
+        pattern: PatternArg,
 
         #[arg(
             long,
@@ -160,42 +154,27 @@ enum Commands {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+enum PatternArg {
+    #[value(help = "Fullscreen random noise, fast")]
+    Noise,
+
+    #[value(help = "Black, red, green, blue and white screens in turn, slow")]
+    Cycle,
+}
+
+impl From<PatternArg> for Pattern {
+    fn from(arg: PatternArg) -> Self {
+        match arg {
+            PatternArg::Noise => Pattern::Noise,
+            PatternArg::Cycle => Pattern::Cycle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
 enum Toggle {
     On,
     Off,
-}
-
-#[derive(Debug, Error)]
-enum CliError {
-    #[error("{source}")]
-    Connect {
-        path: String,
-        source: std::io::Error,
-    },
-
-    #[error("{0}")]
-    Ipc(#[from] zenbookd_ipc::IpcError),
-}
-
-fn send_request(request: Request) -> Result<Response, CliError> {
-    let path = socket_path();
-
-    let mut stream = UnixStream::connect(&path).map_err(|source| CliError::Connect {
-        path: path.clone(),
-        source,
-    })?;
-
-    stream
-        .set_read_timeout(Some(REQUEST_TIMEOUT))
-        .map_err(zenbookd_ipc::IpcError::Io)?;
-
-    stream
-        .set_write_timeout(Some(REQUEST_TIMEOUT))
-        .map_err(zenbookd_ipc::IpcError::Io)?;
-
-    zenbookd_ipc::send_message(&mut stream, &request)?;
-
-    Ok(zenbookd_ipc::receive_message(&mut stream)?)
 }
 
 fn confirmation(command: &Commands) -> String {
@@ -237,24 +216,7 @@ fn confirmation(command: &Commands) -> String {
 }
 
 fn report_connect_failure(path: &str, source: &std::io::Error) {
-    let hint = match source.kind() {
-        ErrorKind::NotFound => {
-            "The service does not appear to be running. Try: systemctl status zenbookd.service"
-                .to_string()
-        }
-
-        ErrorKind::PermissionDenied => format!(
-            "The socket at {path} is group-owned by zenbookd. \
-             Try: sudo usermod -aG zenbookd $USER, then log back in"
-        ),
-
-        ErrorKind::ConnectionRefused => {
-            "The socket exists but nothing is listening. Try: systemctl restart zenbookd.service"
-                .to_string()
-        }
-
-        _ => "Try: systemctl status zenbookd.service".to_string(),
-    };
+    let hint = connect_hint(source.kind(), path);
 
     ui::failure(
         "Cannot reach the zenbookd service",
@@ -327,7 +289,7 @@ fn main() -> ExitCode {
             minutes,
             hold,
             size,
-        } => return pixel_refresh(*pattern, *size, *hold, *minutes),
+        } => return pixel_refresh((*pattern).into(), *size, *hold, *minutes),
         Commands::Status => Request::GetStatus,
         Commands::SetLimit { limit } => Request::SetChargeLimit(*limit),
         Commands::Boost { stop } => Request::SetBoost(!stop),
@@ -359,13 +321,13 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
 
-        Err(CliError::Connect { path, source }) => {
+        Err(ClientError::Connect { path, source }) => {
             report_connect_failure(&path, &source);
 
             ExitCode::FAILURE
         }
 
-        Err(CliError::Ipc(err)) => {
+        Err(ClientError::Ipc(err)) => {
             ui::failure(
                 "Lost contact with the zenbookd service",
                 &err.to_string(),

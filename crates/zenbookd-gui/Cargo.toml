@@ -1,0 +1,20 @@
+[package]
+name = "zenbookd-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zenbookd-gui"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+zenbookd-ipc.path = "../zenbookd-ipc"
+zenbookd-client.path = "../zenbookd-client"
+
+gpui.workspace = true
+gpui_platform = { workspace = true, features = ["wayland"] }
