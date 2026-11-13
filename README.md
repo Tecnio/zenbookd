@@ -24,8 +24,15 @@ zenbookd set-charge-period 30         # days between periodic full charges
 zenbookd set-charge-hold 60           # minutes to sit at 100% for a full charge
 zenbookd set-wifi-power-save on       # disable Wi-Fi power saving while on AC
 zenbookd reload                       # re-read config.toml without restarting
+zenbookd pixel-refresh                # fullscreen noise to clear OLED image retention
+zenbookd pixel-refresh cycle          # black, red, green, blue, white screens in turn
+zenbookd pixel-refresh --minutes 10   # stop on its own instead of on q or Esc
 zenbookd --version                    # print the version
 ```
+
+`pixel-refresh` runs `ffplay` (from ffmpeg) fullscreen in your own session, so it
+needs a graphical session and does not go through the daemon. `--hold` sets how many
+seconds each colour stays up in the `cycle` pattern (default 5).
 
 `status` prints a panel:
 

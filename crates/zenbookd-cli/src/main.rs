@@ -1,4 +1,5 @@
 mod completions;
+mod refresh;
 mod status;
 mod ui;
 
@@ -15,6 +16,8 @@ use clap::{
 };
 use thiserror::Error;
 use zenbookd_ipc::{Request, Response, socket_path};
+
+use crate::refresh::{Pattern, RefreshError};
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
@@ -41,6 +44,10 @@ fn examples() -> String {
             "minutes to sit at 100% for a full charge",
         ),
         ("reload", "re-read config.toml without restarting"),
+        (
+            "pixel-refresh cycle",
+            "flash solid screens to clear burn-in",
+        ),
     ];
 
     let mut out = format!("{HEADER}Examples:{HEADER:#}");
@@ -120,6 +127,27 @@ enum Commands {
     #[command(about = "Re-read /etc/zenbookd/config.toml without restarting the service")]
     Reload,
 
+    #[command(about = "Play a fullscreen pattern to clear OLED image retention")]
+    PixelRefresh {
+        #[arg(value_enum, default_value = "noise")]
+        pattern: Pattern,
+
+        #[arg(
+            long,
+            help = "Stop after this many minutes instead of waiting for q or Esc",
+            value_parser = clap::value_parser!(u32).range(1..=720)
+        )]
+        minutes: Option<u32>,
+
+        #[arg(
+            long,
+            default_value_t = 5,
+            help = "Seconds each color is held in the cycle pattern",
+            value_parser = clap::value_parser!(u32).range(1..=600)
+        )]
+        hold: u32,
+    },
+
     #[command(hide = true)]
     Completions,
 }
@@ -195,8 +223,8 @@ fn confirmation(command: &Commands) -> String {
 
         Commands::Reload => "Configuration reloaded".to_string(),
 
-        Commands::Status | Commands::Completions => {
-            unreachable!("status and completions never return Response::Ok")
+        Commands::Status | Commands::PixelRefresh { .. } | Commands::Completions => {
+            unreachable!("status, pixel-refresh and completions never return Response::Ok")
         }
     }
 }
@@ -228,6 +256,34 @@ fn report_connect_failure(path: &str, source: &std::io::Error) {
     );
 }
 
+fn pixel_refresh(pattern: Pattern, hold: u32, minutes: Option<u32>) -> ExitCode {
+    ui::success("Pixel refresh started, press q or Esc to stop");
+
+    match refresh::run(pattern, hold, minutes) {
+        Ok(()) => {
+            ui::success("Pixel refresh finished");
+
+            ExitCode::SUCCESS
+        }
+
+        Err(err @ RefreshError::FfplayMissing) => {
+            ui::failure(
+                "Cannot run the pixel refresh",
+                &err.to_string(),
+                Some("Install ffmpeg, which provides ffplay"),
+            );
+
+            ExitCode::FAILURE
+        }
+
+        Err(err) => {
+            ui::failure("Pixel refresh failed", &err.to_string(), None);
+
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -238,6 +294,11 @@ fn main() -> ExitCode {
                 Err(_) => ExitCode::FAILURE,
             };
         }
+        Commands::PixelRefresh {
+            pattern,
+            minutes,
+            hold,
+        } => return pixel_refresh(*pattern, *hold, *minutes),
         Commands::Status => Request::GetStatus,
         Commands::SetLimit { limit } => Request::SetChargeLimit(*limit),
         Commands::Boost { stop } => Request::SetBoost(!stop),

@@ -166,6 +166,9 @@ mod tests {
         assert!(script.contains("-a on"));
         assert!(script.contains("-a off"));
         assert!(script.contains("-a help"));
+        assert!(script.contains("-a noise"));
+        assert!(script.contains("-a cycle"));
+        assert!(script.contains("-l minutes"));
         assert!(!script.contains("-a completions"));
         assert!(
             !script
