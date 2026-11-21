@@ -153,7 +153,7 @@ enum Commands {
     Completions,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 enum PatternArg {
     #[value(help = "Fullscreen random noise, fast")]
     Noise,
@@ -171,7 +171,7 @@ impl From<PatternArg> for Pattern {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 enum Toggle {
     On,
     Off,

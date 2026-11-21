@@ -15,7 +15,7 @@ const WIRELESS_KEY: &str = "phy80211";
 const IW: &str = "iw";
 const IW_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Wifi {
     interface: String,
 }
@@ -245,6 +245,7 @@ mod tests {
     #[test]
     fn wait_for_exit_kills_a_stuck_child() {
         let mut child = Command::new("/bin/sleep").arg("10").spawn().unwrap();
+
         let err = wait_for_exit(&mut child, Duration::from_millis(200)).unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);

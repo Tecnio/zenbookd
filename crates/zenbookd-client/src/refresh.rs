@@ -15,7 +15,7 @@ const FRAME_RATE: u32 = 30;
 const CYCLE_COLORS: u32 = 5;
 const WINDOW_TITLE: &str = "zenbookd pixel refresh";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resolution {
     pub width: u32,
     pub height: u32,
@@ -27,7 +27,7 @@ impl fmt::Display for Resolution {
     }
 }
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 #[error("expected WIDTHxHEIGHT, such as 2880x1800")]
 pub struct InvalidResolution;
 
@@ -99,7 +99,7 @@ pub fn detect_resolution() -> Result<Resolution, RefreshError> {
     pick(connectors).ok_or(RefreshError::DisplayNotFound)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pattern {
     Noise,
     Cycle,

@@ -12,7 +12,7 @@ const TYPE_MAINS: &str = "Mains";
 
 const ONLINE_KEY: &str = "online";
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Adapter {
     online: PathBuf,
 }
@@ -69,6 +69,7 @@ mod tests {
 
     fn supply(root: &Path, name: &str, attrs: &[(&str, &str)]) {
         let dir = root.join(name);
+
         fs::create_dir_all(&dir).unwrap();
 
         for (key, value) in attrs {

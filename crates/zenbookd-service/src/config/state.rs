@@ -7,7 +7,7 @@ use crate::config::{ConfigLoadError, ConfigSaveError, atomic};
 
 const FLUSH_ATTEMPTS: u32 = 8;
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 pub struct State {
     pub last_full_charge: Option<DateTime<Utc>>,
 
@@ -146,9 +146,11 @@ mod tests {
     #[test]
     fn sync_after_write_clears_dirty_when_unchanged() {
         let mut state = PersistentState::new(State::default());
+
         state.mark_dirty();
 
         let snapshot = state.data().clone();
+
         state.sync_after_write(&snapshot);
 
         assert!(!state.dirty);
@@ -157,6 +159,7 @@ mod tests {
     #[test]
     fn sync_after_write_keeps_dirty_when_diverged() {
         let mut state = PersistentState::new(State::default());
+
         let snapshot = state.data().clone();
 
         state.data_mut().wifi_power_save_restore = Some(true);

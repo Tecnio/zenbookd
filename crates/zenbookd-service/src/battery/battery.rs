@@ -125,6 +125,7 @@ mod tests {
 
     fn supply(root: &Path, name: &str, attrs: &[(&str, &str)]) {
         let dir = root.join(name);
+
         fs::create_dir_all(&dir).unwrap();
 
         for (key, value) in attrs {

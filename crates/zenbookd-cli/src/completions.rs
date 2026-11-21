@@ -6,6 +6,7 @@ use crate::Cli;
 
 pub fn write_fish(out: &mut dyn Write) -> io::Result<()> {
     let mut cmd = Cli::command();
+
     cmd.build();
 
     writeln!(out, "complete -c zenbookd -f")?;
@@ -128,6 +129,7 @@ mod tests {
 
     fn script() -> String {
         let mut buf = Vec::new();
+
         write_fish(&mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }

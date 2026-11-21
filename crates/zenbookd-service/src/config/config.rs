@@ -29,7 +29,7 @@ full_charge_hold = 60
 disable_wifi_power_save_on_ac = true
 ";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     pub charge_limit: u32,
 
@@ -531,6 +531,7 @@ some_future_key = \"keep me\"
         .unwrap();
 
         let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+
         perms.set_mode(0o500);
         fs::set_permissions(tmp.path(), perms).unwrap();
 
@@ -543,6 +544,7 @@ some_future_key = \"keep me\"
         );
 
         let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+
         perms.set_mode(0o700);
         fs::set_permissions(tmp.path(), perms).unwrap();
 

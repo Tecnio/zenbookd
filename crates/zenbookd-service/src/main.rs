@@ -384,6 +384,7 @@ fn monitor_power(config: Arc<RwLock<Config>>, state: Arc<Mutex<PersistentState>>
 
         if let Some(wifi_power_save_restore) = new_restore {
             let mut state = state.lock().unwrap();
+
             state.data_mut().wifi_power_save_restore = wifi_power_save_restore;
             state.mark_dirty();
         }

@@ -167,6 +167,7 @@ mod tests {
             last_full_charge: Some(now() - chrono::Duration::minutes(30)),
             ..Default::default()
         };
+
         let before = state.clone();
 
         let decision = decide(&cfg(80, false, 90), &mut state, 100, HOUR * 3, now());

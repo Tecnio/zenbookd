@@ -6,6 +6,7 @@ use std::{
 
 pub fn write(path: &Path, data: &str) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
+
     fs::create_dir_all(parent)?;
 
     let name = path

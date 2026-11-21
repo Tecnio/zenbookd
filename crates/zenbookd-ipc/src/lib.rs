@@ -17,7 +17,7 @@ pub enum IpcError {
 
 pub type Result<T> = std::result::Result<T, IpcError>;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub enum Request {
     GetStatus,
     SetChargeLimit(u32),
@@ -29,7 +29,7 @@ pub enum Request {
     ReloadConfig,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct ServiceStatus {
     pub charge_limit: u32,
 
@@ -66,7 +66,7 @@ pub struct ServiceStatus {
     pub wifi_power_save_on_ac: Option<bool>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub enum Response {
     Status(ServiceStatus),
     Ok,
@@ -99,7 +99,9 @@ pub fn send_message<W: Write, T: Serialize>(mut writer: W, message: &T) -> Resul
 
 pub fn receive_message<R: Read, T: for<'de> Deserialize<'de>>(mut reader: R) -> Result<T> {
     let mut len_bytes = [0u8; 4];
+
     reader.read_exact(&mut len_bytes)?;
+
     let len = u32::from_be_bytes(len_bytes) as usize;
 
     if len > MAX_MESSAGE_LEN {
@@ -107,6 +109,7 @@ pub fn receive_message<R: Read, T: for<'de> Deserialize<'de>>(mut reader: R) -> 
     }
 
     let mut buffer = vec![0u8; len];
+
     reader.read_exact(&mut buffer)?;
 
     let message = serde_json::from_slice(&buffer)?;
@@ -120,6 +123,7 @@ mod tests {
     #[test]
     fn roundtrips_a_request() {
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Request::SetChargeLimit(80)).unwrap();
 
         let decoded: Request = receive_message(&buf[..]).unwrap();
@@ -130,21 +134,27 @@ mod tests {
     #[test]
     fn roundtrips_the_new_config_requests() {
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Request::SetFullChargePeriod(30)).unwrap();
 
         let decoded: Request = receive_message(&buf[..]).unwrap();
+
         assert_eq!(decoded, Request::SetFullChargePeriod(30));
 
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Request::ReloadConfig).unwrap();
 
         let decoded: Request = receive_message(&buf[..]).unwrap();
+
         assert_eq!(decoded, Request::ReloadConfig);
 
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Request::SetFullChargeHold(90)).unwrap();
 
         let decoded: Request = receive_message(&buf[..]).unwrap();
+
         assert_eq!(decoded, Request::SetFullChargeHold(90));
     }
 
@@ -168,6 +178,7 @@ mod tests {
         };
 
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Response::Status(status)).unwrap();
 
         let decoded: Response = receive_message(&buf[..]).unwrap();
@@ -201,6 +212,7 @@ mod tests {
     #[test]
     fn length_prefix_matches_payload_length() {
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Request::GetStatus).unwrap();
 
         let len = u32::from_be_bytes(buf[..4].try_into().unwrap()) as usize;
@@ -211,6 +223,7 @@ mod tests {
     #[test]
     fn truncated_frame_is_an_io_error() {
         let mut buf = Vec::new();
+
         send_message(&mut buf, &Request::GetStatus).unwrap();
         buf.pop();
 
@@ -224,6 +237,7 @@ mod tests {
         let body = b"not json";
 
         let mut buf = (body.len() as u32).to_be_bytes().to_vec();
+
         buf.extend_from_slice(body);
 
         let err = receive_message::<_, Request>(&buf[..]).unwrap_err();
@@ -234,6 +248,7 @@ mod tests {
     #[test]
     fn oversized_length_prefix_is_rejected() {
         let mut buf = ((MAX_MESSAGE_LEN + 1) as u32).to_be_bytes().to_vec();
+
         buf.extend_from_slice(b"{}");
 
         let err = receive_message::<_, Request>(&buf[..]).unwrap_err();
@@ -244,6 +259,7 @@ mod tests {
     #[test]
     fn absurd_length_prefix_is_rejected_without_allocating() {
         let mut buf = u32::MAX.to_be_bytes().to_vec();
+
         buf.extend_from_slice(b"{}");
 
         let err = receive_message::<_, Request>(&buf[..]).unwrap_err();
@@ -256,6 +272,7 @@ mod tests {
         let huge = Response::Error("x".repeat(MAX_MESSAGE_LEN));
 
         let mut buf = Vec::new();
+
         let err = send_message(&mut buf, &huge).unwrap_err();
 
         assert!(matches!(err, IpcError::MessageTooLarge(_)));

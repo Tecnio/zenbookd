@@ -3,7 +3,7 @@ use zenbookd_ipc::{Response, ServiceStatus};
 
 const SERVICE_HINT: &str = "Try: systemctl status zenbookd.service";
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Fault {
     pub cause: String,
     pub hint: String,
@@ -59,14 +59,14 @@ impl Link {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
     Info,
     Warning,
     Failure,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
     pub severity: Severity,
     pub headline: String,
@@ -191,6 +191,7 @@ mod tests {
     #[test]
     fn daemon_errors_become_warnings_in_order() {
         let mut status = status();
+
         status.config_error = Some("line 3: bad\nvalue".to_string());
         status.threshold_error = Some("permission denied".to_string());
 

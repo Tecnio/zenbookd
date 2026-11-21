@@ -23,7 +23,7 @@ pub type StepHandler = Rc<dyn Fn(Direction, bool, &mut Window, &mut App)>;
 
 pub type ClickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonKind {
     Primary,
     Secondary,

@@ -36,7 +36,7 @@ const RUN_LENGTH: Range = Range {
 
 actions!(zenbookd, [Quit]);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
     Limit,
     Period,
@@ -165,6 +165,7 @@ fn fetch_status() -> Result<Response, ClientError> {
 impl Dashboard {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
+
         focus.focus(window, cx);
 
         let poll = cx.spawn(async move |this, cx| {
@@ -326,6 +327,7 @@ impl Dashboard {
         };
 
         let enable = !status.enable_periodic_full_charge;
+
         status.enable_periodic_full_charge = enable;
 
         self.command(Request::SetPeriodicFullCharge(enable), |_| {}, cx);
@@ -338,6 +340,7 @@ impl Dashboard {
         };
 
         let disable = !status.wifi_power_save_on_ac.unwrap_or(false);
+
         status.wifi_power_save_on_ac = Some(disable);
 
         self.command(Request::SetWifiPowerSave(disable), |_| {}, cx);
@@ -934,9 +937,11 @@ mod tests {
     #[test]
     fn caption_names_why_the_threshold_differs() {
         let mut boosting = status(80, Some(100));
+
         boosting.boost_until = Some(1);
 
         let mut calibrating = status(80, Some(100));
+
         calibrating.calibration_active = true;
 
         assert_eq!(

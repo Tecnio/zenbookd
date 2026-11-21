@@ -18,11 +18,11 @@ thiserror.workspace = true
 
 serde.workspace = true
 
-toml = "1.2.1"
+toml = "1.2.2"
 
 chrono = { version = "0.4.45", features = ["serde"] }
 
-toml_edit = "0.25.19"
+toml_edit = "0.25.20"
 
 [dev-dependencies]
 tempfile = "3"

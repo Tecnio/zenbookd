@@ -101,6 +101,7 @@ mod tests {
 
     fn contrast(foreground: Rgba, background: Rgba) -> f32 {
         let (first, second) = (luminance(foreground), luminance(background));
+
         let (light, dark) = if first > second {
             (first, second)
         } else {

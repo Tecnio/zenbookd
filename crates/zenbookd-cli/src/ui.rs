@@ -10,7 +10,7 @@ const FALLBACK_COLUMNS: usize = 80;
 
 pub const GAUGE_CELLS: usize = 20;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tone {
     Plain,
     Dim,
@@ -87,13 +87,13 @@ fn columns() -> usize {
         .unwrap_or(FALLBACK_COLUMNS)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Span {
     text: String,
     tone: Tone,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Line {
     spans: Vec<Span>,
 }

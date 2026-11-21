@@ -49,6 +49,7 @@ pub fn run_server(shared: Shared) -> std::io::Result<()> {
     let listener = UnixListener::bind(path)?;
 
     let mut perms = fs::metadata(path)?.permissions();
+
     perms.set_mode(0o660);
     fs::set_permissions(path, perms)?;
 
@@ -93,6 +94,7 @@ fn update_config(
     let mut config = config.write().unwrap();
 
     let mut candidate = config.clone();
+
     apply(&mut candidate);
 
     match save_config(&candidate) {
@@ -256,6 +258,7 @@ fn handle_client(mut stream: UnixStream, shared: Shared) -> std::io::Result<()> 
             let candidate = {
                 let state = state.lock().unwrap();
                 let mut candidate = state.data().clone();
+
                 candidate.boost_until = until;
                 candidate
             };
@@ -264,6 +267,7 @@ fn handle_client(mut stream: UnixStream, shared: Shared) -> std::io::Result<()> 
                 Ok(()) => {
                     {
                         let mut state = state.lock().unwrap();
+
                         state.data_mut().boost_until = until;
                         state.sync_after_write(&candidate);
                     }
