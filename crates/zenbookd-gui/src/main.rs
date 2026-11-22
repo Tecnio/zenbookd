@@ -11,9 +11,9 @@ use gpui_platform::application;
 
 use crate::dashboard::{Dashboard, Quit};
 
-const WINDOW_WIDTH: f32 = 420.0;
-const WINDOW_HEIGHT: f32 = 760.0;
-const MIN_WIDTH: f32 = 360.0;
+const WINDOW_WIDTH: f32 = 460.0;
+const WINDOW_HEIGHT: f32 = 650.0;
+const MIN_WIDTH: f32 = 380.0;
 const MIN_HEIGHT: f32 = 420.0;
 const APP_ID: &str = "zenbookd";
 

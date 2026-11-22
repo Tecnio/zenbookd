@@ -15,16 +15,16 @@ pub fn boost_remaining(until: i64, now: i64) -> String {
     let remaining = until - now;
 
     if remaining <= 0 {
-        return "ending".to_string();
+        return "Ending".to_string();
     }
 
     let hours = remaining / HOUR;
     let minutes = remaining % HOUR / MINUTE;
 
     if hours == 0 {
-        format!("{minutes}m left")
+        format!("{minutes}m remaining")
     } else {
-        format!("{hours}h {minutes}m left")
+        format!("{hours}h {minutes}m remaining")
     }
 }
 
@@ -48,7 +48,7 @@ pub fn held_at_full(held_seconds: u64, hold_minutes: u32) -> String {
 
 pub fn run_length(minutes: u32) -> String {
     if minutes == 0 {
-        "until Esc".to_string()
+        "Manual".to_string()
     } else {
         format!("{minutes} min")
     }
@@ -124,10 +124,13 @@ mod tests {
     fn boost_counts_down_in_hours_and_minutes() {
         assert_eq!(
             boost_remaining(1_000 + 23 * HOUR + 9 * MINUTE, 1_000),
-            "23h 9m left"
+            "23h 9m remaining"
         );
-        assert_eq!(boost_remaining(1_000 + 9 * MINUTE + 30, 1_000), "9m left");
-        assert_eq!(boost_remaining(1_000, 1_000), "ending");
+        assert_eq!(
+            boost_remaining(1_000 + 9 * MINUTE + 30, 1_000),
+            "9m remaining"
+        );
+        assert_eq!(boost_remaining(1_000, 1_000), "Ending");
     }
 
     #[test]
@@ -147,8 +150,8 @@ mod tests {
     }
 
     #[test]
-    fn zero_minutes_runs_until_esc() {
-        assert_eq!(run_length(0), "until Esc");
+    fn zero_minutes_runs_manually() {
+        assert_eq!(run_length(0), "Manual");
         assert_eq!(run_length(15), "15 min");
     }
 }

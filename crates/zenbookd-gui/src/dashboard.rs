@@ -13,12 +13,12 @@ use zenbookd_ipc::{Request, Response, ServiceStatus};
 
 use crate::{
     controls::{
-        ButtonKind, ClickHandler, Meter, StepHandler, Stepper, button, heading, meter, row,
-        row_with_note, section, segment, segments, stepper, switch,
+        ButtonKind, ClickHandler, Meter, StepHandler, Stepper, button, card, group, meter, row,
+        row_with_note, segment, segments, stepper, switch,
     },
     link::{Fault, Link, Notice, Severity, command_notice, status_notices},
     readout::{self, Direction, Range},
-    theme,
+    theme::{self, Theme},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -142,19 +142,27 @@ pub struct Dashboard {
     _poll: Task<()>,
 }
 
-fn level_color(level: Level) -> Rgba {
+fn bar_level_color(theme: Theme, level: Level) -> Rgba {
     match level {
-        Level::Good => theme::good(),
-        Level::Low => theme::warning(),
-        Level::Critical => theme::danger(),
+        Level::Good => theme.good,
+        Level::Low => theme.warning,
+        Level::Critical => theme.danger,
     }
 }
 
-fn severity_color(severity: Severity) -> Rgba {
+fn text_level_color(theme: Theme, level: Level) -> Rgba {
+    match level {
+        Level::Good => theme.text,
+        Level::Low => theme.warning,
+        Level::Critical => theme.danger,
+    }
+}
+
+fn severity_color(theme: Theme, severity: Severity) -> Rgba {
     match severity {
-        Severity::Info => theme::text_muted(),
-        Severity::Warning => theme::warning(),
-        Severity::Failure => theme::danger(),
+        Severity::Info => theme.text,
+        Severity::Warning => theme.warning,
+        Severity::Failure => theme.danger,
     }
 }
 
@@ -167,6 +175,9 @@ impl Dashboard {
         let focus = cx.focus_handle();
 
         focus.focus(window, cx);
+
+        cx.observe_window_appearance(window, |_, _, cx| cx.notify())
+            .detach();
 
         let poll = cx.spawn(async move |this, cx| {
             loop {
@@ -365,6 +376,11 @@ impl Dashboard {
         );
     }
 
+    fn dismiss_notice(&mut self, cx: &mut Context<Self>) {
+        self.notice = None;
+        cx.notify();
+    }
+
     fn start_refresh(&mut self, cx: &mut Context<Self>) {
         let size = match refresh::detect_resolution() {
             Ok(size) => size,
@@ -489,7 +505,7 @@ impl Dashboard {
         })
     }
 
-    fn field_stepper(&self, field: Field, enabled: bool, cx: &Context<Self>) -> Div {
+    fn field_stepper(&self, theme: Theme, field: Field, enabled: bool, cx: &Context<Self>) -> Div {
         let range = field.range();
         let value = self.shown(field);
 
@@ -503,6 +519,7 @@ impl Dashboard {
         };
 
         stepper(
+            theme,
             field.id(),
             shown,
             enabled && value.is_some(),
@@ -510,154 +527,206 @@ impl Dashboard {
         )
     }
 
-    fn service_line(&self) -> Div {
-        let (state, color) = match &self.link {
-            Link::Connecting => ("connecting", theme::text_faint()),
-            Link::Online(_) => ("service running", theme::good()),
-            Link::Unreachable(_) => ("service unreachable", theme::danger()),
-        };
-
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .text_xs()
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text_muted())
-                    .child("Battery"),
-            )
-            .child(div().text_color(color).child(state))
-    }
-
-    fn render_battery(&self) -> Div {
-        let body: Vec<AnyElement> = match &self.link {
-            Link::Online(status) => self.battery_reading(status),
+    fn render_battery(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let content: Vec<AnyElement> = match &self.link {
+            Link::Online(status) => self.battery_reading(theme, status),
             Link::Connecting => vec![
                 div()
                     .text_sm()
-                    .text_color(theme::text_faint())
-                    .child("Reading the battery")
+                    .text_color(theme.text_muted)
+                    .child("Connecting to zenbookd…")
                     .into_any_element(),
             ],
-            Link::Unreachable(fault) => fault_lines(fault),
+            Link::Unreachable(fault) => {
+                vec![self.fault_card_body(theme, fault, cx).into_any_element()]
+            }
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .px(px(20.0))
-            .pt(px(14.0))
-            .pb(px(16.0))
-            .border_b_1()
-            .border_color(theme::rule())
-            .child(self.service_line())
-            .children(body)
+        card(
+            theme,
+            [div()
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .px(px(14.0))
+                .py(px(12.0))
+                .children(content)
+                .into_any_element()],
+        )
     }
 
-    fn battery_reading(&self, status: &ServiceStatus) -> Vec<AnyElement> {
+    fn fault_card_body(&self, theme: Theme, fault: &Fault, cx: &Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_start()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.danger)
+                            .child("Daemon unreachable"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(fault.cause.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_faint)
+                            .child(SharedString::from(fault.hint.clone())),
+                    ),
+            )
+            .child(button(
+                theme,
+                "retry",
+                "Retry",
+                ButtonKind::Standard,
+                true,
+                self.on_click(cx, Self::refetch),
+            ))
+    }
+
+    fn battery_reading(&self, theme: Theme, status: &ServiceStatus) -> Vec<AnyElement> {
         let limit = self.shown(Field::Limit).unwrap_or(status.charge_limit);
 
         let figure = match status.battery_charge {
             Some(charge) => div()
-                .text_3xl()
-                .font_weight(FontWeight::LIGHT)
+                .text_2xl()
+                .font_weight(FontWeight::SEMIBOLD)
                 .font_features(theme::tabular())
-                .text_color(level_color(charge_level(charge)))
+                .text_color(text_level_color(theme, charge_level(charge)))
                 .child(format!("{charge}%")),
 
             None => div()
                 .text_sm()
-                .text_color(theme::text_faint())
-                .child("Charge not reported"),
+                .text_color(theme.text_muted)
+                .child("Charge unavailable"),
         };
 
         let health = status.battery_health.map(|health| {
             div()
                 .flex()
+                .items_baseline()
                 .gap(px(6.0))
-                .child(div().text_color(theme::text_muted()).child("Health"))
+                .text_sm()
+                .child(div().text_color(theme.text_muted).child("Health"))
                 .child(
                     div()
+                        .font_weight(FontWeight::MEDIUM)
                         .font_features(theme::tabular())
-                        .text_color(level_color(health_level(health)))
+                        .text_color(text_level_color(theme, health_level(health)))
                         .child(format!("{health}%")),
                 )
         });
 
-        let reading = div()
+        let header = div()
             .flex()
-            .items_end()
+            .items_baseline()
             .justify_between()
             .child(figure)
-            .child(div().pb(px(4.0)).text_sm().children(health));
+            .children(health);
 
-        let gauge = meter(Meter {
-            fill: status
-                .battery_charge
-                .map(|charge| charge.min(100) as f32 / 100.0),
-            fill_color: status.battery_charge.map_or(theme::text_faint(), |charge| {
-                level_color(charge_level(charge))
-            }),
-            marker: Some(limit.min(100) as f32 / 100.0),
-        });
+        let gauge = meter(
+            theme,
+            Meter {
+                fill: status
+                    .battery_charge
+                    .map(|charge| charge.min(100) as f32 / 100.0),
+                fill_color: status.battery_charge.map_or(theme.text_faint, |charge| {
+                    bar_level_color(theme, charge_level(charge))
+                }),
+                marker: Some(limit.min(100) as f32 / 100.0),
+            },
+        );
 
         let caption = div()
             .text_xs()
             .font_features(theme::tabular())
-            .text_color(theme::text_muted())
+            .text_color(theme.text_muted)
             .child(threshold_caption(status, limit));
 
         vec![
-            reading.into_any_element(),
-            div().pt(px(4.0)).child(gauge).into_any_element(),
+            header.into_any_element(),
+            div().py(px(2.0)).child(gauge).into_any_element(),
             caption.into_any_element(),
         ]
     }
 
-    fn render_charge(&self, status: Option<&ServiceStatus>, cx: &Context<Self>) -> Div {
+    fn render_charge(
+        &self,
+        theme: Theme,
+        status: Option<&ServiceStatus>,
+        cx: &Context<Self>,
+    ) -> Div {
         let online = status.is_some();
         let boost_until = status.and_then(|status| status.boost_until);
 
         let (note, label) = match boost_until {
             Some(until) => (readout::boost_remaining(until, readout::now()), "Stop"),
             None => (
-                "Back to the limit once 100% has held".to_string(),
+                "Charge to 100%, then restore limit".to_string(),
                 "Charge to 100%",
             ),
         };
 
-        section([
-            row("Charge limit", self.field_stepper(Field::Limit, online, cx)).into_any_element(),
-            row_with_note(
-                "Boost",
-                note,
-                button(
-                    "boost",
-                    label,
-                    ButtonKind::Secondary,
-                    online,
-                    self.on_click(cx, Self::toggle_boost),
-                ),
-            )
-            .into_any_element(),
-        ])
+        group(
+            theme,
+            "Charging",
+            [
+                row(
+                    theme,
+                    "Charge limit",
+                    self.field_stepper(theme, Field::Limit, online, cx),
+                )
+                .into_any_element(),
+                row_with_note(
+                    theme,
+                    "Boost",
+                    note,
+                    button(
+                        theme,
+                        "boost",
+                        label,
+                        ButtonKind::Standard,
+                        online,
+                        self.on_click(cx, Self::toggle_boost),
+                    ),
+                )
+                .into_any_element(),
+            ],
+        )
     }
 
-    fn render_full_charge(&self, status: Option<&ServiceStatus>, cx: &Context<Self>) -> Div {
+    fn render_full_charge(
+        &self,
+        theme: Theme,
+        status: Option<&ServiceStatus>,
+        cx: &Context<Self>,
+    ) -> Div {
         let online = status.is_some();
         let periodic = status.is_some_and(|status| status.enable_periodic_full_charge);
 
         let last = status.map(|status| {
             format!(
-                "Last full charge {}",
+                "Last full charge: {}",
                 readout::since_full_charge(status.last_full_charge, readout::now())
             )
         });
 
         let periodic_switch = switch(
+            theme,
             "periodic",
             periodic,
             online,
@@ -665,63 +734,71 @@ impl Dashboard {
         );
 
         let periodic_row = match last {
-            Some(note) => row_with_note("Periodic full charge", note, periodic_switch),
-            None => row("Periodic full charge", periodic_switch),
+            Some(note) => row_with_note(theme, "Periodic full charge", note, periodic_switch),
+            None => row(theme, "Periodic full charge", periodic_switch),
         };
 
         let held = status
             .and_then(|status| status.held_at_full.zip(status.full_charge_hold))
             .map(|(held, hold)| readout::held_at_full(held, hold));
 
-        let hold = self.field_stepper(Field::Hold, online, cx);
+        let hold = self.field_stepper(theme, Field::Hold, online, cx);
 
         let hold_row = match held {
-            Some(note) => row_with_note("Hold at 100%", note, hold),
-            None => row("Hold at 100%", hold),
+            Some(note) => row_with_note(theme, "Hold at 100%", note, hold),
+            None => row(theme, "Hold at 100%", hold),
         };
 
-        section([
-            heading("Full charge").into_any_element(),
-            periodic_row.into_any_element(),
-            row(
-                "Every",
-                self.field_stepper(Field::Period, online && periodic, cx),
-            )
-            .into_any_element(),
-            hold_row.into_any_element(),
-        ])
+        group(
+            theme,
+            "Full charge",
+            [
+                periodic_row.into_any_element(),
+                row(
+                    theme,
+                    "Interval",
+                    self.field_stepper(theme, Field::Period, online && periodic, cx),
+                )
+                .into_any_element(),
+                hold_row.into_any_element(),
+            ],
+        )
     }
 
-    fn render_wifi(&self, status: Option<&ServiceStatus>, cx: &Context<Self>) -> Div {
+    fn render_wifi(&self, theme: Theme, status: Option<&ServiceStatus>, cx: &Context<Self>) -> Div {
         let setting = status.and_then(|status| status.wifi_power_save_on_ac);
 
         let note = match (status, setting) {
-            (Some(_), None) => "This daemon does not report the setting",
-            _ => "Restored when unplugged",
+            (Some(_), None) => "Not reported by this daemon",
+            _ => "Restored on battery",
         };
 
-        section([
-            heading("Wi-Fi").into_any_element(),
-            row_with_note(
-                "No power saving on AC",
+        group(
+            theme,
+            "Wi-Fi",
+            [row_with_note(
+                theme,
+                "Disable power saving on AC",
                 note,
                 switch(
+                    theme,
                     "wifi",
                     setting.unwrap_or(false),
                     setting.is_some(),
                     self.on_click(cx, Self::toggle_wifi),
                 ),
             )
-            .into_any_element(),
-        ])
+            .into_any_element()],
+        )
     }
 
-    fn render_pixel_refresh(&self, cx: &Context<Self>) -> Div {
+    fn render_pixel_refresh(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let running = self.pixel_refresh.child.is_some();
         let pattern = self.pixel_refresh.pattern;
 
         let pattern_option = |id: &'static str, label: &'static str, choice: Pattern| {
             segment(
+                theme,
                 id,
                 label,
                 pattern == choice,
@@ -733,6 +810,7 @@ impl Dashboard {
         let view = cx.weak_entity();
 
         let run_length = stepper(
+            theme,
             "run-length",
             Stepper {
                 value: readout::run_length(self.pixel_refresh.minutes).into(),
@@ -749,66 +827,100 @@ impl Dashboard {
 
         let (note, action) = if running {
             (
-                "Running fullscreen, q or Esc ends it",
+                "Press q or Esc to stop",
                 button(
+                    theme,
                     "refresh-stop",
                     "Stop",
-                    ButtonKind::Secondary,
+                    ButtonKind::Standard,
                     true,
                     self.on_click(cx, Self::stop_refresh),
                 ),
             )
         } else {
             (
-                "Fullscreen on the built-in display",
+                "Runs fullscreen on built-in display",
                 button(
+                    theme,
                     "refresh-start",
                     "Start",
-                    ButtonKind::Primary,
+                    ButtonKind::Standard,
                     true,
                     self.on_click(cx, Self::start_refresh),
                 ),
             )
         };
 
-        section([
-            heading("Pixel refresh").into_any_element(),
-            row(
-                "Pattern",
-                segments([
-                    pattern_option("pattern-noise", "Noise", Pattern::Noise),
-                    pattern_option("pattern-cycle", "Colour cycle", Pattern::Cycle),
-                ]),
-            )
-            .into_any_element(),
-            row("Stop after", run_length).into_any_element(),
-            row_with_note("Clear image retention", note, action).into_any_element(),
-        ])
+        group(
+            theme,
+            "Pixel refresh",
+            [
+                row(
+                    theme,
+                    "Pattern",
+                    segments(
+                        theme,
+                        [
+                            pattern_option("pattern-noise", "Noise", Pattern::Noise),
+                            pattern_option("pattern-cycle", "Color cycle", Pattern::Cycle),
+                        ],
+                    ),
+                )
+                .into_any_element(),
+                row(theme, "Duration", run_length).into_any_element(),
+                row_with_note(theme, "Fullscreen", note, action).into_any_element(),
+            ],
+        )
     }
 
-    fn render_footer(&self, status: Option<&ServiceStatus>, cx: &Context<Self>) -> Div {
-        let notices: Vec<Notice> = self
-            .notice
-            .iter()
-            .cloned()
-            .chain(status.map(status_notices).unwrap_or_default())
-            .collect();
+    fn render_footer(
+        &self,
+        theme: Theme,
+        status: Option<&ServiceStatus>,
+        cx: &Context<Self>,
+    ) -> Div {
+        let mut notice_rows: Vec<AnyElement> = Vec::new();
+
+        if let Some(notice) = &self.notice {
+            notice_rows.push(
+                notice_line(
+                    theme,
+                    notice.clone(),
+                    Some(self.on_click(cx, Self::dismiss_notice)),
+                )
+                .into_any_element(),
+            );
+        }
+
+        if let Some(status) = status {
+            for notice in status_notices(status) {
+                notice_rows.push(notice_line(theme, notice, None).into_any_element());
+            }
+        }
+
+        let (dot_color, status_text) = match &self.link {
+            Link::Online(_) => (theme.good, VERSION.to_string()),
+            Link::Connecting => (theme.text_faint, format!("Connecting · {VERSION}")),
+            Link::Unreachable(_) => (theme.danger, format!("Offline · {VERSION}")),
+        };
 
         div()
             .flex()
             .flex_none()
             .flex_col()
-            .border_t_1()
-            .border_color(theme::rule())
-            .children(notices.into_iter().map(notice_line))
+            .children(notice_rows)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .h(px(40.0))
-                    .px(px(14.0))
+                    .px(px(12.0))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface)
                     .child(button(
+                        theme,
                         "reload",
                         "Reload config",
                         ButtonKind::Quiet,
@@ -817,10 +929,17 @@ impl Dashboard {
                     ))
                     .child(
                         div()
-                            .pr(px(6.0))
-                            .text_xs()
-                            .text_color(theme::text_faint())
-                            .child(VERSION),
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .pr(px(4.0))
+                            .child(div().size(px(6.0)).rounded_full().bg(dot_color))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.text_faint)
+                                    .child(status_text),
+                            ),
                     ),
             )
     }
@@ -829,62 +948,78 @@ impl Dashboard {
 fn threshold_caption(status: &ServiceStatus, limit: u32) -> String {
     match status.applied_threshold {
         Some(threshold) if status.boost_until.is_some() => {
-            format!("Charging to {threshold}% for the boost, limit {limit}%")
+            format!("Boosting to {threshold}% (limit {limit}%)")
         }
 
         Some(threshold) if status.calibration_active => {
-            format!("Charging to {threshold}% to calibrate, limit {limit}%")
+            format!("Calibrating to {threshold}% (limit {limit}%)")
         }
 
         Some(threshold) if threshold == limit => format!("Charging stops at {limit}%"),
 
-        Some(threshold) => format!("Threshold {threshold}%, limit {limit}%"),
+        Some(threshold) => format!("Applied {threshold}% (limit {limit}%)"),
 
-        None => format!("Limit {limit}%, threshold not reported"),
+        None => format!("Limit {limit}% (threshold unavailable)"),
     }
 }
 
-fn fault_lines(fault: &Fault) -> Vec<AnyElement> {
-    vec![
+fn notice_line(theme: Theme, notice: Notice, on_dismiss: Option<ClickHandler>) -> Div {
+    let dismiss = on_dismiss.map(|handler| {
         div()
+            .id("dismiss-notice")
+            .size(px(24.0))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded(theme::radius_control())
             .text_sm()
-            .text_color(theme::text())
-            .child(SharedString::from(fault.cause.clone()))
-            .into_any_element(),
-        div()
-            .text_xs()
-            .text_color(theme::text_faint())
-            .child(SharedString::from(fault.hint.clone()))
-            .into_any_element(),
-    ]
-}
+            .text_color(theme.text_muted)
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.control_hover).text_color(theme.text))
+            .on_click(move |_, window, cx| handler(window, cx))
+            .child("×")
+    });
 
-fn notice_line(notice: Notice) -> Div {
     div()
         .flex()
-        .flex_col()
-        .gap(px(2.0))
-        .px(px(20.0))
-        .pt(px(10.0))
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .px(px(16.0))
+        .py(px(8.0))
+        .border_t_1()
+        .border_color(theme.border)
+        .bg(theme.notice_bg)
         .child(
             div()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(severity_color(notice.severity))
-                .child(notice.headline),
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(severity_color(theme, notice.severity))
+                        .child(notice.headline),
+                )
+                .when(!notice.detail.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(notice.detail),
+                    )
+                }),
         )
-        .when(!notice.detail.is_empty(), |this| {
-            this.child(
-                div()
-                    .text_xs()
-                    .text_color(theme::text_muted())
-                    .child(notice.detail),
-            )
-        })
+        .children(dismiss)
 }
 
 impl Render for Dashboard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_appearance(window.appearance());
         let status = self.link.status();
 
         div()
@@ -893,21 +1028,28 @@ impl Render for Dashboard {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme::canvas())
-            .text_color(theme::text())
+            .bg(theme.canvas)
+            .text_color(theme.text)
             .child(
                 div()
                     .id("body")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(self.render_battery())
-                    .child(self.render_charge(status, cx))
-                    .child(self.render_full_charge(status, cx))
-                    .child(self.render_wifi(status, cx))
-                    .child(self.render_pixel_refresh(cx)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(14.0))
+                            .p(px(16.0))
+                            .child(self.render_battery(theme, cx))
+                            .child(self.render_charge(theme, status, cx))
+                            .child(self.render_full_charge(theme, status, cx))
+                            .child(self.render_wifi(theme, status, cx))
+                            .child(self.render_pixel_refresh(theme, cx)),
+                    ),
             )
-            .child(self.render_footer(status, cx))
+            .child(self.render_footer(theme, status, cx))
     }
 }
 
@@ -950,15 +1092,15 @@ mod tests {
         );
         assert_eq!(
             threshold_caption(&boosting, 80),
-            "Charging to 100% for the boost, limit 80%"
+            "Boosting to 100% (limit 80%)"
         );
         assert_eq!(
             threshold_caption(&calibrating, 80),
-            "Charging to 100% to calibrate, limit 80%"
+            "Calibrating to 100% (limit 80%)"
         );
         assert_eq!(
             threshold_caption(&status(80, None), 80),
-            "Limit 80%, threshold not reported"
+            "Limit 80% (threshold unavailable)"
         );
     }
 
